@@ -1,7 +1,9 @@
 /*
   Andreas Gagas
-  CLASS HERE
+  3319 - Wireless Networks and Security 
   Lab01 - Implementation and Application of DES 
+
+  server.cpp
 */
 
 #pragma comment(lib, "Ws2_32.lib")
@@ -13,6 +15,7 @@
 #include <ws2tcpip.h>
 
 #define DEFAULT_PORT_NUM 8000 
+#define BUFFER_LENGTH 512 
 
 
 int main(int argc, char **argv) {
@@ -22,8 +25,6 @@ int main(int argc, char **argv) {
 
   if (argc == 1) port_num = DEFAULT_PORT_NUM;
   else port_num = sscanf(argv[1], "%d", &port_num); 
-  
-  std::cout << "port num is: " << port_num << std::endl; 
 
   // ----------- GET KEY -------------------------------------------------------------
   std::string key;
@@ -34,7 +35,8 @@ int main(int argc, char **argv) {
     read_key.close();
   }
 
-  std::cout << "key is: " << key << std::endl;
+  //std::cout << "key is: " << key << std::endl;
+
 
 
   // ----------- Network Setup (Winsock) ----------------------------------------------
@@ -76,7 +78,7 @@ int main(int argc, char **argv) {
 
   // Listen
   retval = listen(server_socket, SOMAXCONN); 
-  std::cout << "Waiting for incoming connection on PORT: " << port_num << std::endl; 
+  std::cout << std::endl << "Waiting for incoming connection from 127.0.0.1 on PORT: " << port_num << std::endl;
   if (retval == SOCKET_ERROR) {
     std::cout << "Error, failed to listen" << std::endl;
     closesocket(server_socket);
@@ -96,32 +98,49 @@ int main(int argc, char **argv) {
   }
 
   std::cout << "Connected" << std::endl; 
+  closesocket(server_socket); 
 
-  // close server socket?? 
+   // ----------- Main Loop (Client is connected) ---------------------------------------------- 
+  char buffer[BUFFER_LENGTH]; 
+  int retval_send = 0, retval_recieve = 0;
 
 
-   // ----------- Main Loop (Client is connected) ----------------------------------------------
+  while (true) {
+    // recieve and send data to client, until client disconnects
 
-  while (1) {
-    // 
+
+    // client will send an encrypted message/ chiphertext, store in buffer 
+    retval_recieve = recv(client_socket, buffer, BUFFER_LENGTH, 0); 
+    if (retval_recieve > 0) {
+      // good data, decrypt message 
+
+      retval_send = send(client_socket, buffer, retval_recieve, 0);
+      if (retval_send == SOCKET_ERROR) {
+        closesocket(client_socket);
+        WSACleanup();
+        return 1; 
+      }
+
+      else {
+        // successfully sent 
+      }
+    }
+
+    else if (retval_recieve == 0) break; // client disconnected, exit loop
+
+    else {
+      std::cout << "Error, recv function failed, socket error" << std::endl;
+      closesocket(client_socket);
+      WSACleanup();
+      exit(1); 
+    }
+
   }
 
-
-  
-
-  
-
-  
-
-
-  // Connected, send greeting to client 
-
-  // client will input their msg in plain text (store std::string message) 
-
-  // ... 
-
-  
-
+  shutdown(client_socket, SD_SEND);
+  closesocket(client_socket); 
+  WSACleanup(); 
+  std::cout << "Server closed" << std::endl; 
 
   return 0; 
 }
