@@ -35,8 +35,11 @@ int main(int argc, char **argv) {
     read_key.close();
   }
 
-  //std::cout << "key is: " << key << std::endl;
+  // store key in c char array 
+  char key_arr[9]; 
+  strcpy(key_arr, key.c_str()); 
 
+  //std::cout << "key is: " << key_arr << std::endl;
 
 
   // ----------- Network Setup (Winsock) ----------------------------------------------
@@ -97,33 +100,47 @@ int main(int argc, char **argv) {
     return 1; 
   }
 
-  std::cout << "Connected" << std::endl; 
+  std::cout << "Connected" << std::endl << std::endl; 
   closesocket(server_socket); 
 
    // ----------- Main Loop (Client is connected) ---------------------------------------------- 
-  char buffer[BUFFER_LENGTH]; 
+  char message_send[BUFFER_LENGTH], message_receive[BUFFER_LENGTH];
   int retval_send = 0, retval_recieve = 0;
-
 
   while (true) {
     // recieve and send data to client, until client disconnects
 
-
-    // client will send an encrypted message/ chiphertext, store in buffer 
-    retval_recieve = recv(client_socket, buffer, BUFFER_LENGTH, 0); 
+    // client will send an encrypted message/ chiphertext, store in c string
+    retval_recieve = recv(client_socket, message_receive, BUFFER_LENGTH-1, 0); 
     if (retval_recieve > 0) {
-      // good data, decrypt message 
 
-      retval_send = send(client_socket, buffer, retval_recieve, 0);
+      // Server side display (receive data) 
+      std::cout << "\n********************\n" << std::endl;
+      std::cout << "received ciphertext  is: " << message_receive << std::endl;
+     // std::cout << "received plaintext is: " << std::endl;
+      std::cout << "********************\n" << std::endl;
+
+      // DECRYPT MESSAGE 
+
+
+      std::cout << "Type message: ";
+      std::cin.getline(message_send, BUFFER_LENGTH);
+
+      // send decrypted ciphertext to client/C. 
+      retval_send = send(client_socket, message_send, strlen(message_send)+1, 0);
       if (retval_send == SOCKET_ERROR) {
         closesocket(client_socket);
         WSACleanup();
         return 1; 
       }
 
-      else {
-        // successfully sent 
-      }
+      // Server side display (sent data)
+      std::cout << "\n\nHi, this is server." << std::endl;
+      std::cout << "********************" << std::endl;
+      std::cout << "key is: " << key_arr << std::endl; 
+      // std::cout << "sent plaintext is: " << std::endl;
+      std::cout << "sent ciphertext  is: " << message_send << std::endl;
+      std::cout << "********************\n" << std::endl;
     }
 
     else if (retval_recieve == 0) break; // client disconnected, exit loop
@@ -133,10 +150,14 @@ int main(int argc, char **argv) {
       closesocket(client_socket);
       WSACleanup();
       exit(1); 
+
+     // break; // recv failed or client disconnected, exit loop 
     }
 
+    //memset(message_send, 0, BUFFER_LENGTH);
   }
 
+  // client disconnected, cleanup, quit server. 
   shutdown(client_socket, SD_SEND);
   closesocket(client_socket); 
   WSACleanup(); 
