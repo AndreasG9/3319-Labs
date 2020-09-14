@@ -4,6 +4,7 @@
   Lab01 - Implementation and Application of DES 
 
   server.cpp
+  // PS C:\Dev CS\Wireless Networks and Security\Lab1
 */
 
 #pragma comment(lib, "Ws2_32.lib")
@@ -34,7 +35,13 @@ int main(int argc, char **argv) {
   int port_num; 
 
   if (argc == 1) port_num = DEFAULT_PORT_NUM;
-  else port_num = sscanf(argv[1], "%d", &port_num); 
+  else port_num = atoi(argv[1]); 
+
+  if (argc > 2) {
+    std::cout << "Too many args, include the port num or nothing";
+    exit(1); 
+  }
+
 
   // ----------- GET KEY, INIT -------------------------------------------------------------
   std::string key_string;
@@ -123,6 +130,8 @@ int main(int argc, char **argv) {
   while (true) {
     // recieve and send data to client, until client disconnects
 
+    std::cout << "\nWaiting to receive a message ... \n" << std::endl; 
+
     // client will send an encrypted message/ chiphertext, store in c string
     retval_recieve = recv(client_socket, message_receive, BUFFER_LENGTH-1, 0); 
     if (retval_recieve > 0) {
@@ -156,7 +165,7 @@ int main(int argc, char **argv) {
       }
 
       catch (const CryptoPP::Exception& err) {
-        std::cerr << "ERROR" << err.what() << std::endl;
+        std::cerr << "ERROR probably exceeded the buffer length\n" << err.what() << std::endl;
         exit(1);
       }
 
