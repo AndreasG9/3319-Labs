@@ -23,6 +23,7 @@
 #include "cryptopp820/secblock.h"
 #include "cryptopp820/modes.h" // ECB 
 #include "cryptopp820/files.h"
+#include <vector>
 
 
 #define DEFAULT_PORT_NUM 8000 
@@ -46,7 +47,6 @@ int main(int argc, char **argv) {
   // ----------- GET KEY, INIT -------------------------------------------------------------
   std::string key_string;
   std::ifstream read_key("key.txt");
-  char key_arr[] = "123"; 
 
   if (read_key.is_open()) {
     // store in c++ string 
@@ -121,127 +121,128 @@ int main(int argc, char **argv) {
   std::cout << "Connected" << std::endl << std::endl; 
   closesocket(server_socket); 
 
-   // ----------- Main Loop (Client is connected) ---------------------------------------------- 
-  char message_send[BUFFER_LENGTH], message_receive[BUFFER_LENGTH];
+  // ----------- Main Loop (Client is connected) ---------------------------------------------- 
+  char message_send[BUFFER_LENGTH] = { 0 }, message_receive[BUFFER_LENGTH] = { 0 };
   int retval_send = 0, retval_recieve = 0;
 
-  std::string encoded, plaintext, ciphertext; 
+  std::string encoded, plaintext, ciphertext;
 
   while (true) {
     // recieve and send data to client, until client disconnects
 
-    std::cout << "\nWaiting to receive a message ... \n" << std::endl; 
+    ciphertext.clear();
+    std::cout << "\nWaiting to receive a message ... \n" << std::endl;
 
-    // client will send an encrypted message/ chiphertext, store in c string
-    retval_recieve = recv(client_socket, message_receive, BUFFER_LENGTH-1, 0); 
-    if (retval_recieve > 0) {
+    // client will send an encrypted message/ chiphertext, store in c string, transfer data to c++ string  
+    while ((retval_recieve = recv(client_socket, message_receive, BUFFER_LENGTH, 0)) > 0) {
 
-      // convert to c++ string 
-      ciphertext.clear();
-      ciphertext = message_receive; 
 
-      // Display as HEX
-      encoded.clear();
-      CryptoPP::StringSource(ciphertext, true,
-        new CryptoPP::HexEncoder(
-          new CryptoPP::StringSink(encoded)
-        )
-      );
-           
+      if (retval_recieve > 0) {
+        // second while loop to ensure we get ALL the sent bytes
+        ciphertext.clear();
+        ciphertext.append(message_receive, retval_recieve);
 
-      try {
-        // DECRYPT MESSAGE w/ crypto++ lib DES 
 
-        CryptoPP::ECB_Mode< CryptoPP::DES >::Decryption decrypt; // ECB, no init vector needed 
-        decrypt.SetKey(key, key.size());
+        try {
+          // DECRYPT MESSAGE w/ crypto++ lib DES 
 
-        // Decrypt, remove padding if needed 
-        plaintext.clear();
-        CryptoPP::StringSource s(ciphertext, true,
-          new CryptoPP::StreamTransformationFilter(decrypt,
-            new CryptoPP::StringSink(plaintext)
+          CryptoPP::ECB_Mode< CryptoPP::DES >::Decryption decrypt; // ECB, no init vector needed 
+          decrypt.SetKey(key, key.size());
+
+          // Decrypt, remove padding if needed 
+          plaintext.clear();
+          CryptoPP::StringSource s(ciphertext, true,
+            new CryptoPP::StreamTransformationFilter(decrypt,
+              new CryptoPP::StringSink(plaintext)
+            )
+          );
+        }
+
+        catch (const CryptoPP::Exception& err) {
+          std::cerr << "ERROR probably exceeded the buffer length\n" << err.what() << std::endl;
+          exit(1);
+        }
+
+        // Display ciphertext as HEX
+        encoded.clear();
+        CryptoPP::StringSource(ciphertext, true,
+          new CryptoPP::HexEncoder(
+            new CryptoPP::StringSink(encoded)
           )
         );
-      }
-
-      catch (const CryptoPP::Exception& err) {
-        std::cerr << "ERROR probably exceeded the buffer length\n" << err.what() << std::endl;
-        exit(1);
-      }
-
-      // Display as HEX
-      encoded.clear();
-      CryptoPP::StringSource(ciphertext, true,
-        new CryptoPP::HexEncoder(
-          new CryptoPP::StringSink(encoded)
-        )
-      );
 
 
-      // Server side display (receive data) 
-      std::cout << "\n********************\n" << std::endl;
-      std::cout << "received ciphertext(hex) is: " << encoded << std::endl;
-      std::cout << "received plaintext is: " << plaintext << std::endl;
-      std::cout << "********************\n" << std::endl;
+        // Server side display (receive data) 
+        std::cout << "\n********************\n" << std::endl;
+        std::cout << "received ciphertext(hex) is: " << encoded << std::endl;
+        std::cout << "received plaintext is: " << plaintext << std::endl;
+        std::cout << "********************\n" << std::endl;
+
+        
 
 
-      
-      // Server's turn to send a message 
-      std::cout << "Type message: ";
-      std::getline(std::cin, plaintext);
+        // Server's turn to send a message 
+        std::cout << "Type message: ";
+        std::getline(std::cin, plaintext);
 
-      try {
+        try {
 
-        CryptoPP::ECB_Mode< CryptoPP::DES >::Encryption encrypt; // ECB, no init vector needed 
-        encrypt.SetKey(key, key.size());
+          CryptoPP::ECB_Mode< CryptoPP::DES >::Encryption encrypt; // ECB, no init vector needed 
+          encrypt.SetKey(key, key.size());
 
-        // Encrpyt, add padding if needed 
-        ciphertext.clear(); 
-        CryptoPP::StringSource(plaintext, true,
-          new CryptoPP::StreamTransformationFilter(encrypt,
-            new CryptoPP::StringSink(ciphertext)
+          // Encrpyt, add padding if needed 
+          ciphertext.clear();
+          CryptoPP::StringSource(plaintext, true,
+            new CryptoPP::StreamTransformationFilter(encrypt,
+              new CryptoPP::StringSink(ciphertext)
+            )
+          );
+        }
+        catch (const CryptoPP::Exception& err) {
+          std::cerr << "ERROR" << err.what() << std::endl;
+          exit(1);
+        }
+
+
+        // send ciphertext to client/C. 
+        retval_send = send(client_socket, ciphertext.c_str(), ciphertext.size(), 0);
+        if (retval_send == SOCKET_ERROR) {
+          closesocket(client_socket);
+          WSACleanup();
+          return 1;
+        }
+
+        // Display as HEX
+        encoded.clear();
+        CryptoPP::StringSource(ciphertext, true,
+          new CryptoPP::HexEncoder(
+            new CryptoPP::StringSink(encoded)
           )
         );
-      }
-      catch (const CryptoPP::Exception& err) {
-        std::cerr << "ERROR" << err.what() << std::endl;
-        exit(1);
-      }
 
-      // send ciphertext to client/C. 
-      retval_send = send(client_socket, ciphertext.c_str(), strlen(ciphertext.c_str()) + 1, 0);
-      if (retval_send == SOCKET_ERROR) {
-        closesocket(client_socket);
-        WSACleanup();
-        return 1; 
+
+        // Server side display (sent data)
+        std::cout << "\n\nHi, this is server." << std::endl;
+        std::cout << "********************" << std::endl;
+        std::cout << "key is: " << key_string << std::endl;
+        std::cout << "sent plaintext is: " << plaintext << std::endl;
+        std::cout << "sent ciphertext(hex) is: " << encoded << std::endl;
+        std::cout << "********************\n" << std::endl;
+
+        std::cout << "\nWaiting to receive a message ... \n" << std::endl;
       }
-
-      // Display as HEX
-      encoded.clear();
-      CryptoPP::StringSource(ciphertext, true,
-        new CryptoPP::HexEncoder(
-          new CryptoPP::StringSink(encoded)
-        )
-      );
-
-      // Server side display (sent data)
-      std::cout << "\n\nHi, this is server." << std::endl;
-      std::cout << "********************" << std::endl;
-      std::cout << "key is: " << key_string << std::endl; 
-      std::cout << "sent plaintext is: " << plaintext << std::endl;
-      std::cout << "sent ciphertext(hex) is: " << encoded << std::endl;
-      std::cout << "********************\n" << std::endl;
-      
     }
 
-    else  break; // client disconnected or recv failed, exit loop 
+    if (retval_recieve < 0) break; // client disconnected or recv error, break out of main loop 
   }
+
+
 
   // client disconnected, cleanup, quit server. 
   shutdown(client_socket, SD_SEND);
-  closesocket(client_socket); 
-  WSACleanup(); 
-  std::cout << "Server closed" << std::endl; 
+  closesocket(client_socket);
+  WSACleanup();
+  std::cout << "Server closed" << std::endl;
 
-  return 0; 
+  return 0;
 }
