@@ -8,7 +8,7 @@
 
    (**HOW TO INCLUDE LIBRARY, IF NEEDED**). 
 - Download Crypto++ 8.2.0 and extract ... 
-- Open crypttest.sln or cryptlib.vcxproj in Visual Studio. Build -> Batch Build -> SELECT cryptlib Release x64 -> **BUILD**.
+- Open crypttest.sln or cryptlib.vcxproj in Visual Studio. Build -> Batch Build -> SELECT cryptlib Release Win32 -> **BUILD**.
 - Copy the cryptlib.lib (in cryptopp820 -> win32 -> Output -> Release -> cryptlib.lib) in same folder as .cpp files (server.cpp and client.cpp). 
 - Because of my header declarations, make sure the entire cryptopp820 folder and cryptlib.lib are in the same folder with .cpp files.  
 - folder will include server.cpp, client.cpp, cryptopp820, cryptlib.lib
