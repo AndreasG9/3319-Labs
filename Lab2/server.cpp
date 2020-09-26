@@ -22,6 +22,7 @@
 #include "cryptopp820/secblock.h"
 #include "cryptopp820/modes.h"
 
+#include "cryptopp820/hmac.h"
 #include "cryptopp820/des.h"
 #include "cryptopp820/sha.h"
 
@@ -123,36 +124,125 @@ int main(int argc, char** argv) {
 
 
   // ----------- Main Loop ( Client is connected ) ---------------------------------------------- 
-  std::string encoded, plaintext, ciphertext;
   char message_receive[BUFFER_LENGTH] = { 0 };
   int retval_send = 0, retval_recieve = 0;
+  std::string m1, m2, mac, m1_concat_hmac, m2_concat_hmac, ciphertext;
+  std::string encoded_mac_received, encoded_mac_calculated, encoded_ct, hash_received, hash_calculated;
 
-  CryptoPP::SHA256 hash;
-  CryptoPP::SecByteBlock key_des((const unsigned char*)(key_des_string.data()), key_des_string.size()); // init key_des 
-
+  // Init keys 
+  CryptoPP::SecByteBlock key_hmac((const unsigned char*)(key_hmac_string.data()), key_hmac_string.size());
+  CryptoPP::SecByteBlock key_des((const unsigned char*)(key_des_string.data()), key_des_string.size());
 
   while (true) {
     // recieve and send data to client, until client disconnects
-
 
     std::cout << "\nWaiting to receive a message ... \n" << std::endl;
 
     // client will send an encrypted message/ chiphertext, store in c string, transfer data to c++ string  
     while ((retval_recieve = recv(client_socket, message_receive, BUFFER_LENGTH, 0)) > 0) {
 
+      std::cout << "\nWaiting to receive a message ... \n" << std::endl;
+
+      std::cout << "bytes received: " << retval_recieve << std::endl;
 
       if (retval_recieve > 0) {
         // second while loop to ensure we get ALL the sent bytes
         ciphertext.clear();
         ciphertext.append(message_receive, retval_recieve);
 
-        // Hash w/ use of crypto++ filters 
+        try {
+          // Decrypt ciphertext using key_des, to get M1 || HMAC(K_HMAC, M1) 
 
+          CryptoPP::ECB_Mode< CryptoPP::DES >::Decryption decrypt; // ECB, no init vector needed 
+          decrypt.SetKey(key_des, key_des.size());
+
+          // Decrypt, remove padding if needed 
+          m1_concat_hmac.clear();
+          CryptoPP::StringSource s(ciphertext, true,
+            new CryptoPP::StreamTransformationFilter(decrypt,
+              new CryptoPP::StringSink(m1_concat_hmac)
+            )
+          );
+        }
+
+        catch (const CryptoPP::Exception& err) {
+          std::cerr << err.what() << std::endl;
+          exit(1);
+        }
+
+        // SPLIT m1_concat_hmac to obtain M1 and HMAC(K_HMAC, M1) 
+        hash_received = m1_concat_hmac.substr((m1_concat_hmac.size() - 32), std::string::npos); // USED SHA-256, so the HMAC is the last 256 bits/ 32 bytes 
+
+        // To verify, compute HMAC-SHA256(KEY_HMAC, M1) and compare hash 
+        m1.clear(); 
+        m1 = m1_concat_hmac.substr(0, m1_concat_hmac.size() - 32);
+
+
+        try {
+          // Generate a new HMAC-SHA256(K_HMAC, M1), store in hash_calculated 
+          CryptoPP::HMAC< CryptoPP::SHA256 > hmac(key_hmac, key_hmac.size());
+
+          CryptoPP::StringSource (m1, true,
+            new CryptoPP::HashFilter(hmac,
+              new CryptoPP::StringSink(hash_calculated)
+            )
+          );
+        }
+
+        catch (const CryptoPP::Exception& e) {
+          std::cout << "ERROR" << std::endl;
+        }
+        
+
+        // Display received ct as readable hex (for print statements)  
+        encoded_ct.clear();
+        CryptoPP::StringSource(message_receive, true,
+          new CryptoPP::HexEncoder(
+            new CryptoPP::StringSink(encoded_ct)
+          )
+        );
+
+        // Display received hash as readable hex 
+        encoded_mac_received.clear();
+        CryptoPP::StringSource(hash_received, true,
+          new CryptoPP::HexEncoder(
+            new CryptoPP::StringSink(encoded_mac_received)
+          )
+        );
+
+        // Display calculated hash as readable hex 
+        encoded_mac_calculated.clear();
+        CryptoPP::StringSource(hash_calculated, true,
+          new CryptoPP::HexEncoder(
+            new CryptoPP::StringSink(encoded_mac_calculated)
+          )
+        );
+
+
+
+        // Server side display (recieved data)
+        std::cout << "\n\nSERVER SIDE" << std::endl;
+        std::cout << "********************" << std::endl;
+        std::cout << "received ciphertext is: " << encoded_ct << std::endl;
+        std::cout << "received plaintext is: " << m1 << std::endl;
+        std::cout << "received hmac is: " << encoded_mac_received << std::endl;
+        std::cout << "calculated hmac is: " << encoded_mac_calculated << std::endl;
+
+        if(hash_received == hash_calculated) std::cout << "HMAC Verified" << std::endl;
+        else std::cout << "HMAC NOT Verified" << std::endl;
+
+        std::cout << "********************\n" << std::endl;
+
+
+
+        // Server's turn to send a message 
+        //std::cout << "Type message: ";
+        //std::getline(std::cin, m2);
 
       }
     }
-
-
+    if (retval_recieve < 0) break; // client disconnected or recv error, break out of main loop 
+  }
 
   return 0; 
 }

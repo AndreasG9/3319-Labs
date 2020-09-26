@@ -128,7 +128,7 @@ int main(int argc, char** argv) {
 
 			CryptoPP::HMAC< CryptoPP::SHA256 > hmac(key_hmac, key_hmac.size());
 
-			CryptoPP::StringSource ss2(m1, true,
+			CryptoPP::StringSource (m1, true,
 				new CryptoPP::HashFilter(hmac,
 					new CryptoPP::StringSink(mac)
 				)
@@ -182,20 +182,22 @@ int main(int argc, char** argv) {
 
 		// Convert ciphertext to readable hex 
 		encoded_ct.clear();
-		CryptoPP::StringSource(m1_concat_hmac, true,
+		CryptoPP::StringSource(ciphertext, true,
 			new CryptoPP::HexEncoder(
 				new CryptoPP::StringSink(encoded_ct)
 			)
 		);
 
+		std::cout << "bytes sent: " << retval_send << std::endl; 
+
 		// Client side display (send data)
-		std::cout << "\n\nCLIENT SIDE." << std::endl;
+		std::cout << "\n\nCLIENT SIDE" << std::endl;
 		std::cout << "********************" << std::endl;
 		std::cout << "Shared HMAC key is: " << key_hmac_string << std::endl;
 		std::cout << "Shared DES key is: " << key_des_string << std::endl;
 		std::cout << "sent plaintext is: " << m1 << std::endl;
 		std::cout << "client side HMAC is: " << encoded_mac << std::endl; 
-		std::cout << "sent ciphertext(hex) is: " << encoded_ct << std::endl;
+		std::cout << "sent ciphertext is: " << encoded_ct << std::endl;
 		std::cout << "********************\n" << std::endl;
 
 
