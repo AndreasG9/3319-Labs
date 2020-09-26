@@ -104,10 +104,13 @@ int main(int argc, char** argv) {
 
 	// --------------- Main Loop (Connected to Server) -------------------
 	char message_receive[BUFFER_LENGTH] = { 0 };
-	int retval_send = 0, retval_recieve = 0;
-	std::string m1, mac, m1_concat_hmac, ciphertext; 
-	std::string encoded_mac, encoded_ct, hash; 
+	int retval_send = 0, retval_receive = 0;
+	//std::string m1, mac, m1_concat_hmac, ciphertext; 
+	//std::string encoded_mac, encoded_ct, hash; 
 
+	std::string m1, m2, hmac_received, hmac_calculated, m1_concat_hmac, m2_concat_hmac, ciphertext;
+	std::string encoded_mac_received, encoded_mac_calculated, encoded_ct;
+	
 
 	// Init keys 
 	CryptoPP::SecByteBlock key_hmac((const unsigned char*)(key_hmac_string.data()), key_hmac_string.size());
@@ -125,12 +128,12 @@ int main(int argc, char** argv) {
 
 		try {
 			// HMAC-SHA256(K_HMAC, M1)
-
+			hmac_calculated.clear(); 
 			CryptoPP::HMAC< CryptoPP::SHA256 > hmac(key_hmac, key_hmac.size());
 
 			CryptoPP::StringSource (m1, true,
 				new CryptoPP::HashFilter(hmac,
-					new CryptoPP::StringSink(mac)
+					new CryptoPP::StringSink(hmac_calculated)
 				)
 			);
 		}
@@ -140,7 +143,7 @@ int main(int argc, char** argv) {
 		}
 
 		// Concatenate plaintext + HMAC, which is: M1 || HMAC(K_HMAC, M1) 
-		m1_concat_hmac = m1 + mac;
+		m1_concat_hmac = m1 + hmac_calculated;
 
 		// DES w/ des_key_string on concat string, which is: DES(K_DES, M1 || HMAC(K_HMAC, M1))  
 		try {
@@ -161,7 +164,6 @@ int main(int argc, char** argv) {
 			exit(1);
 		}
 
-
 		// send ciphertext to server/S (as c string) 
 		retval_send = send(connected_socket, ciphertext.c_str(), ciphertext.size(), 0);
 		if (retval_send == SOCKET_ERROR) {
@@ -173,10 +175,10 @@ int main(int argc, char** argv) {
 
 
 		// Convert mac to readable hex 
-		encoded_mac.clear();
-		CryptoPP::StringSource (mac, true,
+		encoded_mac_calculated.clear();
+		CryptoPP::StringSource (hmac_calculated, true,
 			new CryptoPP::HexEncoder(
-				new CryptoPP::StringSink(encoded_mac)
+				new CryptoPP::StringSink(encoded_mac_calculated)
 			)
 		);
 
@@ -188,19 +190,113 @@ int main(int argc, char** argv) {
 			)
 		);
 
-		std::cout << "bytes sent: " << retval_send << std::endl; 
 
 		// Client side display (send data)
 		std::cout << "\n\nCLIENT SIDE" << std::endl;
 		std::cout << "********************" << std::endl;
 		std::cout << "Shared HMAC key is: " << key_hmac_string << std::endl;
 		std::cout << "Shared DES key is: " << key_des_string << std::endl;
-		std::cout << "sent plaintext is: " << m1 << std::endl;
-		std::cout << "client side HMAC is: " << encoded_mac << std::endl; 
+		std::cout << "plain message: " << m1 << std::endl;
+		std::cout << "client side HMAC is: " << encoded_mac_calculated << std::endl;
 		std::cout << "sent ciphertext is: " << encoded_ct << std::endl;
 		std::cout << "********************\n" << std::endl;
 
+		
 
+		std::cout << "\nWaiting to receive a message ... \n" << std::endl;
+
+		while ((retval_receive = recv(connected_socket, message_receive, BUFFER_LENGTH, 0)) > 0) {
+
+			if (retval_receive > 0) {
+				// store received ciphertext in c++ string 
+				ciphertext.clear();
+				ciphertext.append(message_receive, retval_receive);
+
+				try {
+					// Decrypt ciphertext using key_des, to get M2 || HMAC(K_HMAC, M2) 
+
+					CryptoPP::ECB_Mode< CryptoPP::DES >::Decryption decrypt;
+					decrypt.SetKey(key_des, key_des.size());
+
+					// decrypt, remove padding if needed 
+					m2_concat_hmac.clear();
+					CryptoPP::StringSource(ciphertext, true,
+						new CryptoPP::StreamTransformationFilter(decrypt,
+							new CryptoPP::StringSink(m2_concat_hmac)
+						)
+					);
+				}
+				catch (const CryptoPP::Exception& err) {
+					std::cerr << err.what() << std::endl;
+					exit(1);
+				}
+
+
+				// SPLIT m1_concat_hmac to obtain M1 and HMAC(K_HMAC, M1) 
+				hmac_received = m2_concat_hmac.substr((m2_concat_hmac.size() - 32), std::string::npos); // USED SHA-256, so the HMAC is the last 256 bits/ 32 bytes 
+
+				// To verify, compute HMAC-SHA256(KEY_HMAC, M1) and compare hash 
+				m2 = m2_concat_hmac.substr(0, m2_concat_hmac.size() - 32);
+
+				try {
+					// Generate a new HMAC-SHA256(K_HMAC, M1), store in hash_calculated 
+					hmac_calculated.clear();
+					CryptoPP::HMAC< CryptoPP::SHA256 > hmac(key_hmac, key_hmac.size());
+
+					CryptoPP::StringSource(m2, true,
+						new CryptoPP::HashFilter(hmac,
+							new CryptoPP::StringSink(hmac_calculated)
+						)
+					);
+				}
+
+				catch (const CryptoPP::Exception& e) {
+					std::cout << "ERROR" << std::endl;
+				}
+
+
+				// Display received ct as readable hex (for print statements)  
+				encoded_ct.clear();
+				CryptoPP::StringSource(ciphertext, true,
+					new CryptoPP::HexEncoder(
+						new CryptoPP::StringSink(encoded_ct)
+					)
+				);
+
+				// Display received hash as readable hex 
+				encoded_mac_received.clear();
+				CryptoPP::StringSource(hmac_received, true,
+					new CryptoPP::HexEncoder(
+						new CryptoPP::StringSink(encoded_mac_received)
+					)
+				);
+
+				// Display calculated hash as readable hex 
+				encoded_mac_calculated.clear();
+				CryptoPP::StringSource(hmac_calculated, true,
+					new CryptoPP::HexEncoder(
+						new CryptoPP::StringSink(encoded_mac_calculated)
+					)
+				);
+
+				// Client side display (receive data)
+				std::cout << "\n\nCLIENT SIDE" << std::endl;
+				std::cout << "********************" << std::endl;
+				std::cout << "received ciphertext is: " << encoded_ct << std::endl;
+				std::cout << "received plaintext  is: " << m2 << std::endl;
+				std::cout << "received hmac is  : " << encoded_mac_received << std::endl;
+				std::cout << "calculated hmac is: " << encoded_mac_calculated << std::endl;
+
+				if (hmac_received == hmac_calculated) std::cout << "HMAC Verified" << std::endl;
+				else std::cout << "HMAC NOT Verified" << std::endl;
+
+				std::cout << "********************\n" << std::endl;
+
+				break; // client turn to send message, return to main loop 
+			}
+		}
+
+		if (retval_receive < 0) break; // client disconnected or recv error, break out of main loop 
 	}
 		
 
