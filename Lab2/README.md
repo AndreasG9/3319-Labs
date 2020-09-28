@@ -1,10 +1,10 @@
 # Lab 2: Implementation and Application of HMAC - Andreas Gagas 
 
-**Language:** C++
-**OS**: Windows 10
-**IDE**: Visual Studio 2019, but developed without project mode, compiled separate .cpp 
-files with MSVC on command line. 
-**External Libraries**: Crypto++ 8.2.0, built as static library (cryptlib Release Win32) 
+**Language:** C++ <br/>
+**OS**: Windows 10 <br/>
+**IDE**: Visual Studio 2019, but developed without project mode, compiled separate .cpp <br/>
+files with MSVC on command line. <br/>
+**External Libraries**: Crypto++ 8.2.0, built as static library (cryptlib Release Win32) <br/>
 <br/>
 **How to include library, if needed**
 * Download Crypto++ 8.2.0 and extract ...  [crypto++ download page](https://www.cryptopp.com/index.html#download)
@@ -21,5 +21,5 @@ files with MSVC on command line.
 -   **run the client second:**  ./client
 -   .. started communication
 
-**Other:** video included that shows compilation, and the running of the server and client. 
+**Other:** video included that shows compilation, and the running of the server and client. <br/> 
 **Repository**: https://github.com/AndreasG9/3319-Labs/tree/master/Lab2
