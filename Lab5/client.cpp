@@ -31,7 +31,10 @@
 
 #define ID_C "CIS3319USERID"
 #define ID_TGS "CIS3319TGSID"
+#define ID_V "CIS3319SERVERID"
 
+std::string decrypt(std::string key_string, std::string ciphertext);
+std::string encrypt(std::string key_string, std::string plaintext);
 long long int get_epoch_time_seconds();
 
 
@@ -48,19 +51,19 @@ long long int get_epoch_time_seconds();
 			exit(1);
 		}
 
+		std::string AD_C = "127.0.01:" + std::to_string(port_num);
+
 		// Get keys 
-		std::string key_c, key_tgs, key_v;
+		std::string key_c_string, key_tgs_string, key_v_string;
 		std::ifstream read_keys("keys.txt");
 
 		if (read_keys.is_open()) {
-			getline(read_keys, key_c);
-			getline(read_keys, key_tgs);
-			getline(read_keys, key_v);
+			getline(read_keys, key_c_string);
+			getline(read_keys, key_tgs_string);
+			getline(read_keys, key_v_string);
 		}
 
 		read_keys.close();
-
-		std::cout << key_c << "\n" << key_tgs << "\n" << key_v << std::endl;
 
 		// ----------- Network Setup (Winsock) ----------------------------------------------
 
@@ -111,7 +114,7 @@ long long int get_epoch_time_seconds();
 
 			do {
 				// Prompt user if ready to send user info msg to AS
-				std::cout << "Send msg to AS (CIS3319USERIDCIS3319TGSID || time stamp) ? hit any key to confirm ...\n";
+				std::cout << "Send msg to AS (CIS3319USERIDCIS3319TGSID || time stamp)? hit any key to confirm ...\n";
 			} while (std::cin.get() != '\n'); 
 
 			// info msg to send to AS 
@@ -133,14 +136,109 @@ long long int get_epoch_time_seconds();
 
 			std::cout << "\nWaiting to receive a message from AS ... \n" << std::endl;
 
+			while ((retval_receive = recv(connected_socket, message_receive, BUFFER_LENGTH, 0)) > 0) {
+
+				if (retval_receive > 0) {
+					// store received data in c++ string 
+					ciphertext.clear();
+					ciphertext.append(message_receive, retval_receive);
+				}
+
+				// DECRYPT msg to get session key, ticket, plus other info
+				plaintext.clear();
+				plaintext = decrypt(key_c_string, ciphertext); // plaintext will contain K_C_TGS || ID_TGS || TS_2 || LIFETIME_2 || TICKET_TGS
+
+				// SPLIT plaintext string to get TICKET_tgs (K_C_TGS will always be an 8-byte string, epoch time in string is 10-bytes, LIFETIME_2 will be 2-bytes)
+				int start = 8 + strlen(ID_TGS) + 10 + 2; 
+				std::string ticket_ciphertext = plaintext.substr(start); // will return encrypted TICKET_TGS
+				
+				// SPLIT plaintext string to get K_C_TGS (session_key from AS)
+				std::string k_c_tgs;
+				k_c_tgs = plaintext.substr(0, 8); 
+
+
+				// DECRYPT TICKET_TGS with K_TGS 
+				std::string ticket_tgs = decrypt(key_tgs_string, ticket_ciphertext); 
+
+
+				// Print received plaintext and ticket from AS
+				std::cout << "\n***************************************************************" << std::endl;
+				std::cout << "received plaintext is: " << plaintext << std::endl; // in this plaintext string ticket_tgs was still encrypted
+				std::cout << "received Ticket_tgs is: " << ticket_tgs << std::endl; 
+				std::cout << "*****************************************************************\n" << std::endl;
+
+				// ============================ (3) ============================================
+				// Generate Authenticator_C = E(K_C_TGS, [ID_C, AD_C, TS_3])
+				std::string auth_c = ID_C; 
+				auth_c += AD_C;
+				auth_c += get_epoch_time_seconds();
+				auth_c = encrypt(k_c_tgs, auth_c); 
+
+
+				// SEND ID_V || TICKET_TGS || AUTH_C to Ticket-granting server (still AS) 
+				plaintext.clear();
+				plaintext += ID_V; 
+				plaintext += ticket_tgs;
+				plaintext += auth_c;
+
+				do {
+					// Prompt user if ready to send user info msg to TGS
+					std::cout << "Send msg to TGS (ID_V || TICKET_TGS || AUTH_C)? hit any key to confirm ...\n";
+				} while (std::cin.get() != '\n');
+
+				retval_send = send(connected_socket, plaintext.c_str(), plaintext.size(), 0);
+				if (retval_send == SOCKET_ERROR) {
+					std::cout << "Error, failed to send" << std::endl;
+					closesocket(connected_socket);
+					WSACleanup();
+					return 1;
+				}
+
+
+				// ============================ (5) ============================================ 
+				// receive  E(K_C_TGS[K_C_V || ID_V || TS_4 || TICKET_V]) from TGS
+
+				while ((retval_receive = recv(connected_socket, message_receive, BUFFER_LENGTH, 0)) > 0) {
+
+					if (retval_receive > 0) {
+						// store received ciphertext in c++ string 
+						ciphertext.clear();
+						ciphertext.append(message_receive, retval_receive);
+
+						// decrypt and split msg, to get encrypted ticket_v, decrypt to get plaintext of ticket_v
+						plaintext.clear();
+						plaintext = decrypt(k_c_tgs, ciphertext);
+
+						int start = 8 + strlen(ID_V) + 10; // 8 for TGS session key, length of ID_V, and 10 bytes for time string. 
+						std::string ticket_v = plaintext.substr(start); 
+						ticket_v = decrypt(key_v_string, ticket_v); 
+
+						// Print received plaintext and ticket from TGS
+						std::cout << "\n***************************************************************" << std::endl;
+						std::cout << "received plaintext is: " << plaintext << std::endl;
+						std::cout << "received Ticket_tgs is: " << ticket_v << std::endl;
+						std::cout << "*****************************************************************\n" << std::endl;
+
+						break; 
+					}
+				}
+
+				// SEND TICKET_V || AUTH_C to V (server2.cpp) 
 
 
 
 
+			}
+			if (retval_receive < 0) break; 
 		}
 
+		// CONNECT TO server2 (SERVICE)
 
-
+	// server disconnected, cleanup, quit client. 
+	shutdown(connected_socket, SD_SEND);
+	closesocket(connected_socket);
+	WSACleanup();
+	std::cout << "Client closed" << std::endl;
 
   return 0; 
 }
@@ -151,4 +249,56 @@ long long int get_epoch_time_seconds();
 		long long int time = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
 		return time;
+	}
+
+
+	std::string encrypt(std::string key_string, std::string plaintext) {
+
+		CryptoPP::SecByteBlock key((const unsigned char*)(key_string.data()), key_string.size());
+		std::string ciphertext;
+
+		try {
+			CryptoPP::ECB_Mode< CryptoPP::DES >::Encryption encrypt;
+			encrypt.SetKey(key, key.size());
+
+			// Encrypt, add padding if needed 
+			CryptoPP::StringSource(plaintext, true,
+				new CryptoPP::StreamTransformationFilter(encrypt,
+					new CryptoPP::StringSink(ciphertext)
+				)
+			);
+		}
+		catch (const CryptoPP::Exception& err) {
+			std::cerr << "ERROR" << err.what() << std::endl;
+			exit(1);
+		}
+
+		return ciphertext; 
+	}
+
+	std::string decrypt(std::string key_string, std::string ciphertext) {
+
+		CryptoPP::SecByteBlock key((const unsigned char*)(key_string.data()), key_string.size());
+		std::string plaintext;
+
+		try {
+
+			CryptoPP::ECB_Mode< CryptoPP::DES >::Decryption decrypt;
+			decrypt.SetKey(key, key.size());
+
+			// Decrypt, remove padding if needed 
+			CryptoPP::StringSource s(ciphertext, true,
+				new CryptoPP::StreamTransformationFilter(decrypt,
+					new CryptoPP::StringSink(plaintext)
+				)
+			);
+		}
+
+		catch (const CryptoPP::Exception& err) {
+			std::cerr << "ERROR probably exceeded the buffer length\n" << err.what() << std::endl;
+			exit(1);
+		}
+
+
+		return plaintext; 
 	}
