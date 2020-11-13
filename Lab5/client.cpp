@@ -97,22 +97,22 @@ long long int get_epoch_time_seconds();
 		}
 
 		// --------------- Connect to Server -------------------
-		retval = connect(connected_socket, (struct sockaddr*)&server, sizeof(server));
-		if (retval == SOCKET_ERROR) {
-			std::cout << "Error, failed to connect" << std::endl;
-			closesocket(connected_socket);
-			WSACleanup();
-			return 1;
-		}
+		//retval = connect(connected_socket, (struct sockaddr*)&server, sizeof(server));
+		//if (retval == SOCKET_ERROR) {
+		//	std::cout << "Error, failed to connect" << std::endl;
+		//	closesocket(connected_socket);
+		//	WSACleanup();
+		//	return 1;
+		//}
 
-		std::cout << "\nConnected to AS" << std::endl << std::endl;
+		//std::cout << "\nConnected to AS" << std::endl << std::endl;
 
 		char message_receive[BUFFER_LENGTH] = { 0 };
 		int retval_send = 0, retval_receive = 0;
 
-		std::string encoded, decoded, plaintext, ciphertext, ticket_v, auth_c;
+		std::string plaintext, ciphertext, ticket_v, auth_c; // use a bunch of other string var, declare inside loop 
 
-		while (true) {
+		while (false) {
 
 			do {
 				// Prompt user if ready to send user info msg to AS
@@ -163,7 +163,7 @@ long long int get_epoch_time_seconds();
 
 				// Print received plaintext and ticket from AS
 				std::cout << "\n***************************************************************" << std::endl;
-				std::cout << "(C) received plaintext is (ticket_tgs decrypted next line): " << plaintext << std::endl; // in this plaintext string ticket_tgs was still encrypted
+				std::cout << "(C) received plaintext is (ticket_tgs decrypted next ln): " << plaintext << std::endl; // in this plaintext string ticket_tgs was still encrypted
 				std::cout << "(C) received Ticket_tgs is: " << ticket_tgs << std::endl; 
 				std::cout << "*****************************************************************\n" << std::endl;
 
@@ -215,7 +215,7 @@ long long int get_epoch_time_seconds();
 
 						// Print received plaintext and ticket from TGS
 						std::cout << "\n***************************************************************" << std::endl;
-						std::cout << "(C) received plaintext is: " << plaintext << std::endl;
+						std::cout << "(C) received plaintext is (ticket_v decrypted next ln) : " << plaintext << std::endl;
 						std::cout << "(C) received Ticket_v is: " << ticket_v << std::endl;
 						std::cout << "*****************************************************************\n" << std::endl;
 
@@ -228,34 +228,65 @@ long long int get_epoch_time_seconds();
 			//if (retval_receive < 0) break; 
 		}
 
-		std::cout << "WILL NOW CONNECT TO SERVER V!" << std::endl; 
-		std::cin.get();
 
-		// server disconnected, cleanup, quit client. 
+
+		// close old socket 
 		shutdown(connected_socket, SD_SEND);
 		closesocket(connected_socket);
 
-		// CONNECT TO V/SERVICE (server2.cpp)
+		// CONNECT TO V (server2.cpp)
 		server.sin_port = htons(8001); // V 
+		SOCKET connected_socket2;
 
-		retval = connect(connected_socket, (struct sockaddr*)&server, sizeof(server));
+		connected_socket2 = socket(AF_INET, SOCK_STREAM, 0);
+		if (connected_socket2 == INVALID_SOCKET) {
+			std::cout << "Error, socket creation failed" << std::endl;
+			WSACleanup();
+			return 1;
+		}
+
+		retval = connect(connected_socket2, (struct sockaddr*)&server, sizeof(server));
 		if (retval == SOCKET_ERROR) {
 			std::cout << "Error, failed to connect" << std::endl;
-			closesocket(connected_socket);
+			closesocket(connected_socket2);
 			WSACleanup();
 			return 1;
 		}
 
 		std::cout << "\nConnected to V" << std::endl << std::endl;
 
-
-		// SEND TICKET_V || AUTH_C to V (server2.cpp) 
-
 		do {
 			// Prompt user if ready to send msg to service V
 			std::cout << "Send msg to V (Ticket_v || Auth_c)? hit any key to confirm ...\n";
 		} while (std::cin.get() != '\n');
 
+		// build msg, ticket_v will be the same , auth_c will have a new time stamp (TS_5), 
+
+
+		// TESTING TESTING 
+		std::string t = "thissKcv"; // K_c_v
+		ticket_v = t + ID_C + AD_C + ID_V + "0123456789" + std::to_string(LIFETIME_4); 
+		std::cout << "ticket v before: " << ticket_v << " " << ticket_v.size() << std::endl; 
+		auth_c = ID_C + AD_C + "0123456789"; 
+		std::cout << "new auth_c before: " << auth_c << " " << auth_c.size() << std::endl;
+
+		ticket_v = encrypt(key_v_string, ticket_v); // encrypt again, don't want to use a new var as ticket_v was already decrypted during step 5 
+		auth_c = encrypt(t, auth_c); 
+		plaintext = ticket_v + auth_c; 
+
+		std::cout << "ticket_v after : " << ticket_v.size(); 
+		std::cout << "auth_c after : " << auth_c.size();
+
+		//  SEND TICKET_V || AUTH_C to V (server2.cpp)  
+		retval_send = send(connected_socket, plaintext.c_str(), plaintext.size(), 0);
+		if (retval_send == SOCKET_ERROR) {
+			std::cout << "Error, failed to send" << std::endl;
+			closesocket(connected_socket);
+			WSACleanup();
+			return 1;
+		}
+
+		std::cin.get(); 
 
 
 		// Receive E(K_C_V[TS_5 + 1]) from V (server2.cpp)
@@ -265,12 +296,11 @@ long long int get_epoch_time_seconds();
 
 		// Print received plaintext and ticket from TGS
 		std::cout << "\n***************************************************************" << std::endl;
-		std::cout << "(C) received plaintext is: " << "todo" << std::endl;
-		std::cout << "(C) received Ticket_tgs is: " << "todo" << std::endl;
+		std::cout << "(C) received plaintext is (TS_5 + 1): " << "todo" << std::endl;
 		std::cout << "*****************************************************************\n" << std::endl;
 
-		shutdown(connected_socket, SD_SEND);
-		closesocket(connected_socket);
+		shutdown(connected_socket2, SD_SEND);
+		closesocket(connected_socket2);
 		WSACleanup();
 		std::cout << "Client (C) closed" << std::endl;
 		return 0; 
