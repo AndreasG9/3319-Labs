@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
   }
 
   std::string AD_C = "127.0.01:" + std::to_string(port_num);
-  std::cout << "AD_C: " << AD_C << std::endl; 
+  //std::cout << "AD_C: " << AD_C << std::endl; 
 
   // Get keys 
   std::string key_c_string, key_tgs_string, key_v_string; 
@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
   char message_receive[BUFFER_LENGTH] = { 0 };
   int retval_send = 0, retval_receive = 0;
 
-  std::string encoded, plaintext, ciphertext, user, TS_2, key_c_tgs, ticket_tgs;;
+  std::string encoded, plaintext, ciphertext, user, TS_2, key_c_tgs, ticket, ticket_tgs;
 
   // ----------- Main Loop ( Client(C) is connected to Server1(AS && TGS) ---------------------------------------------- 
 
@@ -144,32 +144,25 @@ int main(int argc, char** argv) {
     // client will send info to AS
     while ((retval_receive = recv(client_socket, message_receive, BUFFER_LENGTH, 0)) > 0) {
 
-      std::cout << "START OF EXHANGE" << std::endl;
-
       if (retval_receive > 0) {
         user.clear();
         user.append(message_receive, retval_receive);
 
         // AS side display (receive user info msg) 
-        std::cout << "\n********************" << std::endl;
+        std::cout << "\n***************************************************************" << std::endl;
         std::cout << "(AS) received message is: " << user << std::endl;
-        std::cout << "********************\n" << std::endl;
+        std::cout << "*****************************************************************\n" << std::endl;
 
         // ======================= STEP (2)=======================================================
         // SPLIT string to get ID_C (already hardcoded, dont really need to do it) 
         std::string id_c = user.substr(0, strlen(ID_C));
-        std::cout << "id_c is: " << id_c << std::endl;
 
-        // Generate K_C_TGS (session key), size will be 8-bytes
+        // AS will generate K_C_TGS (session key), size will be 8-bytes
         key_c_tgs = gen_session_key();
-        std::cout << "key_c_tgs is: " << key_c_tgs << std::endl;
 
         // Ticket_TGS = E(K_TGS, [K_C_TGS || ID_C || AD_C || ID_TGS || TS_2 || LIFETIME_2) 
-        //std::string ticket_tgs;
         TS_2 = std::to_string(get_epoch_time_seconds());
-        std::string ticket = key_c_tgs + id_c + AD_C + ID_TGS + TS_2 + std::to_string(LIFETIME_2);
-
-        std::cout << "ticket before ticket_tgs: " << ticket << std::endl; // REMOVE LATER
+        ticket = key_c_tgs + id_c + AD_C + ID_TGS + TS_2 + std::to_string(LIFETIME_2);
 
         // Encrypt ticket using DES with key_tgs to get ticket_tgs
         ticket_tgs = encrypt(key_tgs_string, ticket);
@@ -196,76 +189,92 @@ int main(int argc, char** argv) {
 
         break; // TGS will take over  
       }
-    } 
-      std::cout << "\n(TGS) waiting to receive client info ... \n" << std::endl;
-      retval_receive = 0;
+    }
 
+    if (retval_receive <= 0) break; // this server will close once client disconnects (leave early, or connect to new server V) 
 
-      // TICKET-GRANTING SERVER (TGS), receive ID_V || TICKET_TGS || AUTH_C 
-      while ((retval_receive = recv(client_socket, message_receive, BUFFER_LENGTH, 0)) > 0) {
+    std::cout << "\n(TGS) waiting to receive client info ... \n" << std::endl;
+
+    // TICKET-GRANTING SERVER (TGS), receive ID_V || TICKET_TGS || AUTH_C 
+    while ((retval_receive = recv(client_socket, message_receive, BUFFER_LENGTH, 0)) > 0) {
         
-        if (retval_receive > 0) {
-          user.clear();
-          user.append(message_receive, retval_receive);
+      if (retval_receive > 0) {
+        user.clear();
+        user.append(message_receive, retval_receive);
 
-          // TGS CHECK to see if ticket is VALID (compare (current - TS_2) < Lifetime_2) 
-          int current_t = get_epoch_time_seconds(); 
-          std::string validity = (current_t - std::stoi(TS_2)) < LIFETIME_2 ? "true" : "false"; 
+        // TGS CHECK to see if ticket is VALID (compare (current - TS_2) < Lifetime_2) 
+        int current_t = get_epoch_time_seconds(); 
+        int valid = (current_t - std::stoi(TS_2)); 
+        std::string validity = valid < LIFETIME_2 ? "true" : "false"; 
 
+        // decrypt auth_c to print msg clearly 
+        int start = strlen(ID_V) + ticket.size();
+        std::string auth_c = user.substr(start);
+        auth_c = decrypt(key_c_tgs, auth_c);
+        
+        // assemble the receive msg back together
+        std::string user_msg = user.substr(0, strlen(ID_V)); 
+        user_msg += user.substr(strlen(ID_V), ticket.size()); 
+        user_msg += auth_c; 
 
-          // (TGS) Print received msg and validitry of Ticket_tgs
-          std::cout << "\n********************" << std::endl;
-          std::cout << "(TGS) received message: " << user << std::endl; 
-          std::cout << "(TGS) valid message: " << validity << std::endl;
-          std::cout << "********************\n" << std::endl; 
+        // (TGS) Print received msg and validitry of Ticket_tgs
+        std::cout << "\n***************************************************************" << std::endl;
+        std::cout << "(TGS) received message (after decrypt auth_c): " << user_msg << std::endl; 
+        std::cout << "(TGS) valid message (current_t - TS_2 = " << valid << ") < 60: "<< validity << std::endl;
+        std::cout << "***************************************************************\n" << std::endl; 
 
-          if (validity == "false") {
-            // ticket time expired, exit loops 
-            std::cout << "INVALID TICKET" << std::endl;
-            break; 
-          }
-
-          // ======================= STEP (4) =======================================================
-          // E(K_C_TGS[K_C_V || ID_V || TS_4 || TICKET_V])
-
-          long long int TS_4 = get_epoch_time_seconds(); 
-
-          // Ticket_V formation E(K_V[K_C_V || ID_C || AD_C || ID_V || TS_4 || LIFETIME_4]) 
-          std::string ticket_v; 
-          ticket_v += key_c_tgs;
-          ticket_v += ID_C;
-          ticket_v += std::to_string(TS_4);
-          ticket_v += LIFETIME_4; 
-          ticket_v = encrypt(key_v_string, ticket_v); 
-
-          std::string tgs_msg;
-          tgs_msg += gen_session_key(); // new session key for C and TGS 
-          std::cout << "TGS SESSION KEY: " << tgs_msg << std::endl; 
-          tgs_msg += ID_V;
-          tgs_msg += std::to_string(TS_4);
-          tgs_msg += ticket_v;
-          tgs_msg = encrypt(key_c_tgs, tgs_msg); 
-
-          // Send ENCRYPTED tgs_msg to C
-          retval_send = send(client_socket, tgs_msg.c_str(), tgs_msg.size(), 0);
-          if (retval_send == SOCKET_ERROR) {
-            closesocket(client_socket);
-            WSACleanup();
-            return 1;
-          }
-
-          // AS AND TGS WORK IS COMPLETE (server2.cpp will take over as V)
+        if (validity == "false") {
+          // ticket time expired, exit loops 
+          std::cout << "INVALID TICKET" << std::endl;
+          break; 
         }
-      }
 
-      if (retval_receive < 0) break;
+        // ======================= STEP (4) =======================================================
+        // E(K_C_TGS[K_C_V || ID_V || TS_4 || TICKET_V])
+
+        long long int TS_4 = get_epoch_time_seconds(); 
+        std::string key_c_v = gen_session_key(); // new session key for C and V generated by TGS
+
+        // Ticket_V formation E(K_V[K_C_V || ID_C || AD_C || ID_V || TS_4 || LIFETIME_4]) 
+        std::string ticket_v; 
+        ticket_v += key_c_v;
+        ticket_v += ID_C;
+        ticket_v += AD_C; 
+        ticket_v += ID_V; 
+        ticket_v += std::to_string(TS_4);
+        ticket_v += std::to_string(LIFETIME_4); 
+        ticket_v = encrypt(key_v_string, ticket_v); 
+
+
+        std::string tgs_msg;
+        tgs_msg += key_c_v; 
+        tgs_msg += ID_V;
+        tgs_msg += std::to_string(TS_4);
+        tgs_msg += ticket_v;
+        tgs_msg = encrypt(key_c_tgs, tgs_msg); 
+
+        // Send ENCRYPTED tgs_msg to C
+        retval_send = send(client_socket, tgs_msg.c_str(), tgs_msg.size(), 0);
+        if (retval_send == SOCKET_ERROR) {
+          closesocket(client_socket);
+          WSACleanup();
+          return 1;
+        }
+
+        // AS AND TGS WORK IS COMPLETE (server2.cpp will take over as V)
+        // WILL REVERT TO START OF AS LOOP or quit if client disconnects 
+        break;
+      }
+    }
+
+    if (retval_receive <= 0) break; // this server will close once client disconnects (leave early, or connect to new server V) 
   }
 
   // client disconnected, cleanup, quit server. 
   shutdown(client_socket, SD_SEND);
   closesocket(client_socket);
   WSACleanup();
-  std::cout << "Server closed" << std::endl;
+  std::cout << "Server (AS/TGS) closed" << std::endl;
 
 	return 0;
 }
@@ -282,11 +291,6 @@ long long int get_epoch_time_seconds() {
 std::string gen_session_key() {
   // return string (8-byte long) random chars, this will be out session key generated by AS 
 
-  //CryptoPP::AutoSeededRandomPool prng;
-  //CryptoPP::SecByteBlock k_session(0x00, 8);
-  //prng.GenerateBlock(k_session, k_session.size());
-  //std::string temp = std::string(k_session.begin(), k_session.end()); // convert data to c++ string 
-
   std::string chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
   srand(time(0));
   std::string temp;
@@ -300,8 +304,6 @@ std::string gen_session_key() {
 
 
 std::string encrypt(std::string key_string, std::string plaintext) {
-
-  std::cout << plaintext.size() << std::endl; 
 
   CryptoPP::SecByteBlock key((const unsigned char*)(key_string.data()), key_string.size());
   std::string ciphertext;
