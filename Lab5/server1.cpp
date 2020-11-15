@@ -54,9 +54,8 @@ int main(int argc, char** argv) {
   }
 
   std::string AD_C = "127.0.01:" + std::to_string(port_num);
-  //std::cout << "AD_C: " << AD_C << std::endl; 
 
-  // Get keys 
+  // Get keys (AS access to K_C, TGS access to K_TGS, TGS (and V) has access to K_V) 
   std::string key_c_string, key_tgs_string, key_v_string; 
   std::ifstream read_keys("keys.txt");
 
@@ -132,7 +131,7 @@ int main(int argc, char** argv) {
   char message_receive[BUFFER_LENGTH] = { 0 };
   int retval_send = 0, retval_receive = 0;
 
-  std::string encoded, plaintext, ciphertext, user, TS_2, key_c_tgs, ticket, ticket_tgs;
+  std::string encoded, plaintext, ciphertext, user, key_c_tgs, ticket, ticket_tgs;
 
   // ----------- Main Loop ( Client(C) is connected to Server1(AS && TGS) ---------------------------------------------- 
 
@@ -151,7 +150,7 @@ int main(int argc, char** argv) {
         // AS side display (receive user info msg) 
         std::cout << "\n***************************************************************" << std::endl;
         std::cout << "(AS) received message is: " << user << std::endl;
-        std::cout << "*****************************************************************\n" << std::endl;
+        std::cout << "****************************************************************\n" << std::endl;
 
         // ======================= STEP (2)=======================================================
         // SPLIT string to get ID_C (already hardcoded, dont really need to do it) 
@@ -161,7 +160,7 @@ int main(int argc, char** argv) {
         key_c_tgs = gen_session_key();
 
         // Ticket_TGS = E(K_TGS, [K_C_TGS || ID_C || AD_C || ID_TGS || TS_2 || LIFETIME_2) 
-        TS_2 = std::to_string(get_epoch_time_seconds());
+        std::string TS_2 = std::to_string(get_epoch_time_seconds());
         ticket = key_c_tgs + id_c + AD_C + ID_TGS + TS_2 + std::to_string(LIFETIME_2);
 
         // Encrypt ticket using DES with key_tgs to get ticket_tgs
@@ -175,11 +174,11 @@ int main(int argc, char** argv) {
         plaintext += std::to_string(LIFETIME_2);
         plaintext += ticket_tgs;
 
-        // E(K_C, [K_C_TGS || ID_C ||AD_C || ID_TGS || TS_2 || Lifetime_2]) using DES with key K_C 
+        // E(K_C, [K_C_TGS || ID_C ||AD_C || ID_TGS || TS_2 || Lifetime_2]) using DES with K_C 
         ciphertext.clear();
         ciphertext = encrypt(key_c_string, plaintext);
 
-        // SEND ENCRYPTED MSG (Shared session key, ticket + other info) to client
+        // SEND ENCRYPTED MSG (Shared session key, encrypted ticket + other info) to client
         retval_send = send(client_socket, ciphertext.c_str(), ciphertext.size(), 0);
         if (retval_send == SOCKET_ERROR) {
           closesocket(client_socket);
@@ -203,23 +202,38 @@ int main(int argc, char** argv) {
         user.append(message_receive, retval_receive);
 
         // TGS CHECK to see if ticket is VALID (compare (current - TS_2) < Lifetime_2) 
-        int current_t = get_epoch_time_seconds(); 
-        int valid = (current_t - std::stoi(TS_2)); 
-        std::string validity = valid < LIFETIME_2 ? "true" : "false"; 
+        // first extract Ticket_tgs (for formality, we are "TGS" now, assume ticket_tgs same size as it should be when AS send its msg)
+        int start = strlen(ID_V);
+        std::string ticket_tgs_extracted = user.substr(start, ticket_tgs.size()); 
+        int ticket_tgs_padding = ticket_tgs_extracted.size(); // use to get auth_c a few lines down
 
+        ticket_tgs_extracted = decrypt(key_tgs_string, ticket_tgs_extracted);
+        std::cout << ticket_tgs_extracted << std::endl; 
+        start = key_c_tgs.size() + strlen(ID_C) + AD_C.size() + strlen(ID_TGS);
+        int TS_2_extracted = std::stoi(ticket_tgs_extracted.substr(start, 10));
+
+        int current_t = get_epoch_time_seconds(); 
+        int valid = current_t - TS_2_extracted;
+        std::string validity = valid < LIFETIME_2 ? "true" : "false"; 
+        
         // decrypt auth_c to print msg clearly 
-        int start = strlen(ID_V) + ticket.size();
+        start = strlen(ID_V) + ticket_tgs_padding;
         std::string auth_c = user.substr(start);
         auth_c = decrypt(key_c_tgs, auth_c);
         
         // assemble the receive msg back together
         std::string user_msg = user.substr(0, strlen(ID_V)); 
-        user_msg += user.substr(strlen(ID_V), ticket.size()); 
+        user_msg += ticket_tgs_extracted; 
         user_msg += auth_c; 
+
+        int size_idv = strlen(ID_V); 
 
         // (TGS) Print received msg and validitry of Ticket_tgs
         std::cout << "\n***************************************************************" << std::endl;
-        std::cout << "(TGS) received message (after decrypt auth_c): " << user_msg << std::endl; 
+        std::cout << "(TGS) received message (after decrypt Auth_c): " << user_msg << std::endl; 
+        std::cout << "(TGS) split ID_V: " << user_msg.substr(0, size_idv) << std::endl; 
+        std::cout << "(TGS) split Ticket_tgs (decrypted in TGS): " << user_msg.substr(size_idv, ticket_tgs_extracted.size()) <<std::endl;
+        std::cout << "(TGS) split Auth_c: " << user_msg.substr(size_idv + ticket_tgs_extracted.size()) << std::endl;
         std::cout << "(TGS) valid message (current_t - TS_2 = " << valid << ") < 60: "<< validity << std::endl;
         std::cout << "***************************************************************\n" << std::endl; 
 
@@ -245,6 +259,16 @@ int main(int argc, char** argv) {
         ticket_v += std::to_string(LIFETIME_4); 
         ticket_v = encrypt(key_v_string, ticket_v); 
 
+        // Display ciphertext as HEX
+        std::string encoded;
+        CryptoPP::StringSource(ticket_v, true,
+          new CryptoPP::HexEncoder(
+            new CryptoPP::StringSink(encoded)
+          )
+        );
+
+        std::cout << "TICKET V HEX:" << encoded << std::endl; 
+
 
         std::string tgs_msg;
         tgs_msg += key_c_v; 
@@ -262,7 +286,7 @@ int main(int argc, char** argv) {
         }
 
         // AS AND TGS WORK IS COMPLETE (server2.cpp will take over as V)
-        // WILL REVERT TO START OF AS LOOP or quit if client disconnects 
+        // WILL REVERT TO START OF AS LOOP or quit if client disconnects
         break;
       }
     }
@@ -274,7 +298,7 @@ int main(int argc, char** argv) {
   shutdown(client_socket, SD_SEND);
   closesocket(client_socket);
   WSACleanup();
-  std::cout << "Server (AS/TGS) closed" << std::endl;
+  std::cout << "Server (AS/TGS) closed (client disconnected)" << std::endl;
 
 	return 0;
 }
@@ -285,7 +309,7 @@ long long int get_epoch_time_seconds() {
 
   long long int time = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
-  return time;
+  return time; 
 }
 
 std::string gen_session_key() {
@@ -301,7 +325,6 @@ std::string gen_session_key() {
 
   return temp;
 }
-
 
 std::string encrypt(std::string key_string, std::string plaintext) {
 

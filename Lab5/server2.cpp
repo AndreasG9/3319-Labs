@@ -55,13 +55,13 @@ int main(int argc, char** argv) {
 
   std::string AD_C = "127.0.01:" + std::to_string(port_num);
 
-  // Get keys 
+  // Get keys. V has access to K_V (other keys generated on fly by AS/TGS are extracted from recieved msg)
   std::string key_c_string, key_tgs_string, key_v_string;
   std::ifstream read_keys("keys.txt");
 
   if (read_keys.is_open()) {
-    getline(read_keys, key_c_string);
-    getline(read_keys, key_tgs_string);
+    getline(read_keys, key_c_string); // will ignore
+    getline(read_keys, key_tgs_string); // will ignore
     getline(read_keys, key_v_string);
   }
 
@@ -186,27 +186,26 @@ int main(int argc, char** argv) {
         std::cout << "(V) split Auth_c: " << auth_c << std::endl;
         std::cout << "(V) valid message (current_t - TS_4 = " << valid << ") < " << LIFETIME_4 << ": " << validity << std::endl;
         std::cout << "*****************************************************************\n" << std::endl;
-        break; // V turn to send msg 
+
+        // ========================= Step (6) ===========================
+        // send E(K_C_V[TS_5 + 1]), service will be granted to C, we are done
+
+        long long int TS_5 = get_epoch_time_seconds() + 1;
+        plaintext.clear();
+        plaintext += std::to_string(TS_5);
+        ciphertext = encrypt(key_c_v, plaintext);
+
+        retval_send = send(client_socket, ciphertext.c_str(), ciphertext.size(), 0);
+        if (retval_send == SOCKET_ERROR) {
+          std::cout << "Error, failed to send" << std::endl;
+          closesocket(client_socket);
+          WSACleanup();
+          return 1;
+        }
       }
-
-      // ========================= Step (6) ===========================
-      // send E(K_C_V[TS_5 + 1]), service will be granted to C, we are done
-
-      long long int TS_5 = get_epoch_time_seconds() + 1; 
-      plaintext.clear();
-      plaintext += std::to_string(TS_5);
-      ciphertext = encrypt(key_c_v, plaintext);
-
-      retval_send = send(client_socket, ciphertext.c_str(), ciphertext.size(), 0);
-      if (retval_send == SOCKET_ERROR) {
-        std::cout << "Error, failed to send" << std::endl;
-        closesocket(client_socket);
-        WSACleanup();
-        return 1;
-      }
-      break; 
     }
-    if (retval_receive < 0) break; 
+
+    if (retval_receive <= 0) break; 
   }
 
 
@@ -214,7 +213,7 @@ int main(int argc, char** argv) {
   shutdown(client_socket, SD_SEND);
   closesocket(client_socket);
   WSACleanup();
-  std::cout << "Server (V) closed" << std::endl;
+  std::cout << "Server (V) closed (client disconnected)" << std::endl;
 
   return 0; 
 }
