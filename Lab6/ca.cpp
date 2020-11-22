@@ -28,13 +28,16 @@
 #include "cryptopp820/files.h"
 
 #define DEFAULT_PORT_NUM 8000 
-#define BUFFER_LENGTH 512 
+#define BUFFER_LENGTH 1024 
 
 #define ID_CA "ID-CA"
 #define ID_S "ID-Server"
 #define LIFETIME_SESS 86400
 
 long long int get_epoch_time_seconds();
+std::string gen_tmp_key(); 
+std::string encode_hex(std::string ct); 
+
 std::string encrypt_rsa(CryptoPP::RSA::PublicKey key, CryptoPP::AutoSeededRandomPool rng, std::string plain);
 std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, std::string cipher);
 std::string sign_rsa(CryptoPP::RSA::PrivateKey SK_CA, std::string message);
@@ -156,16 +159,18 @@ int main(int argc, char** argv) {
 
         // Print out ciphertext and temp des key
         std::cout << "\n***************************************************************" << std::endl;
-        std::cout << "(CA) received ciphertext: " << ciphertext << std::endl;
-        std::cout << "(CA) received K_TMP1 " << plaintext.substr(0, 8) << std::endl;
+        //std::cout << "(CA) received ciphertext: " << ciphertext << std::endl;
+        std::cout << "(CA) received ciphertext (HEX encoded): " << encode_hex(ciphertext) << std::endl;
+        std::cout << "(CA) received K_TMP1: " << plaintext.substr(0, 8) << std::endl;
         std::cout << "***************************************************************\n" << std::endl;
 
+        
         //  ===================== STEP 2 ===================================================
 
         // Extract DES_K_TMP1 from plaintext 
         std::string k_tmp1 = plaintext.substr(0, 8); // been using 8-byte keys
 
-        // Generate new public/private key pair for S (params defined above, key-size 1024) 
+        // Generate new public/private key pair for S (params defined above, key-size 512) 
         CryptoPP::RSA::PrivateKey SK_S(params); // private key 
         CryptoPP::RSA::PublicKey PK_S(params); // public key
 
@@ -178,33 +183,59 @@ int main(int argc, char** argv) {
         CryptoPP::StringSink sink2(encoded_SK_S);
         SK_S.DEREncode(sink2);
 
-        // Build Cert_S = Sign_SK_CA [ID_S || IC_CA || PK_S]
-        std::string sign_sk_ca = ID_S;
-        sign_sk_ca += ID_CA;
-        sign_sk_ca += encoded_PK_S;
+        std::cout << "size pk_s: " << encoded_PK_S.size() << "\t size sk_s: " << encoded_SK_S.size() << std::endl;
 
-        // Sign 
-        sign_sk_ca = sign_rsa(SK_CA, sign_sk_ca); 
+        // Build Cert_S = Sign_SK_CA [ID_S || IC_CA || PK_S]
+        std::string cert_s = ID_S;
+        cert_s += ID_CA;
+        cert_s += encoded_PK_S;
+
+        // Sign w/ SK_CA
+        cert_s = sign_rsa(SK_CA, cert_s); 
+
+        std::cout << "size: cert_s :" << cert_s.size() << std::endl;
 
         // Build PK_S || SK_S || CERT_S || ID_S || TS_2
         plaintext.clear();
+        plaintext += std::to_string(encoded_PK_S.size());
         plaintext += encoded_PK_S;
+        plaintext += std::to_string(encoded_SK_S.size());
         plaintext += encoded_SK_S;
-        plaintext += sign_sk_ca;
+        plaintext += std::to_string(cert_s.size());
+        plaintext += cert_s;
         plaintext += ID_S;
         plaintext += std::to_string(get_epoch_time_seconds()); 
 
         // Encrypt using DES_K_TMP1
         ciphertext = encrypt_des(k_tmp1, plaintext);
 
-        // SEND encrypted msg (new key pair, cert_s, etc...) to client
-        retval_send = send(ca_socket, ciphertext.c_str(), ciphertext.size(), 0);
+        std::cout << "ct size: " << ciphertext.size() << std::endl;
+
+        // SEND encrypted msg (new key pair, cert_s, etc...) to server
+        retval_send = send(server_socket, ciphertext.c_str(), ciphertext.size(), 0);
         if (retval_send == SOCKET_ERROR) {
           std::cout << "Error, failed to send" << std::endl;
-          closesocket(ca_socket);
+          closesocket(server_socket);
           WSACleanup();
           return 1;
         }
+
+        // public key's {n, e}
+        const CryptoPP::Integer& public_n = PK_S.GetModulus();
+        const CryptoPP::Integer& public_e = PK_S.GetPublicExponent();
+
+        // private key's {n, d}
+        const CryptoPP::Integer& private_n = SK_S.GetModulus();
+        const CryptoPP::Integer& private_d = SK_S.GetPrivateExponent();
+
+
+        // Print out sent ciphertext, generated key pair, and Cert_s
+        std::cout << "\n***************************************************************" << std::endl;
+        std::cout << "(CA) sent ciphertext (HEX encoded): " << encode_hex(ciphertext) << std::endl << std::endl;
+        std::cout << "(CA) generated Public Key PK_S: " << "\nn:" << public_n << "\ne: " << public_e << std::endl;
+        std::cout << "(CA) generated Private Key SK_S: " << "\nn:" << private_n << "\nd: " << private_d << std::endl << std::endl;
+        std::cout << "(CA) Cert_s (HEX encoded): " << encode_hex(cert_s) << std::endl;
+        std::cout << "***************************************************************\n" << std::endl;
 
         break; // CA work is complete (server.cpp will disconnect ...)
       }
@@ -212,7 +243,6 @@ int main(int argc, char** argv) {
 
     if (retval_receive <= 0) break; // server disconnected (likely connected to C, as work with CA done))
   }
-
 
   // cleanup
   shutdown(server_socket, SD_SEND);
@@ -229,6 +259,20 @@ long long int get_epoch_time_seconds() {
   long long int time = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
   return time;
+}
+
+std::string encode_hex(std::string ct) {
+
+  std::string encoded;
+
+  CryptoPP::StringSource(ct, true,
+    new CryptoPP::HexEncoder(
+      new CryptoPP::StringSink(encoded)
+    )
+  );
+
+  return encoded;
+
 }
 
 std::string encrypt_rsa(CryptoPP::RSA::PublicKey key, CryptoPP::AutoSeededRandomPool rng, std::string plain) {
