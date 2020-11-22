@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
 
   std::string AD_C = "127.0.01:" + std::to_string(port_num);
 
-  //  ===================== Generate RSA public/private keys and preshare PUBLIC key ===================================================
+  //  ===================== Generate CA pair of RSA public/private keys and preshare PUBLIC key ===================================================
   CryptoPP::AutoSeededRandomPool rng;
 
   CryptoPP::InvertibleRSAFunction params; // params will include n,p,q,d,e 
@@ -151,7 +151,6 @@ int main(int argc, char** argv) {
         ciphertext.clear();
         ciphertext.append(message_receive, retval_receive);
 
-
         // Decrypt using private key SK_CA to get K_TMP1 || ID_S || TS_1
         plaintext = decrypt_rsa(SK_CA, ciphertext);
 
@@ -170,20 +169,27 @@ int main(int argc, char** argv) {
         CryptoPP::RSA::PrivateKey SK_S(params); // private key 
         CryptoPP::RSA::PublicKey PK_S(params); // public key
 
-        
+        // CONVERT RSA::PublicKey, RSA::PrivateKey to C++ STRINGS!
+        std::string encoded_PK_S, encoded_SK_S;
+
+        CryptoPP::StringSink sink(encoded_PK_S);
+        PK_S.DEREncode(sink);
+
+        CryptoPP::StringSink sink2(encoded_SK_S);
+        SK_S.DEREncode(sink2);
 
         // Build Cert_S = Sign_SK_CA [ID_S || IC_CA || PK_S]
         std::string sign_sk_ca = ID_S;
         sign_sk_ca += ID_CA;
-        //sign_sk_ca += PK_S;
+        sign_sk_ca += encoded_PK_S;
 
         // Sign 
         sign_sk_ca = sign_rsa(SK_CA, sign_sk_ca); 
 
         // Build PK_S || SK_S || CERT_S || ID_S || TS_2
         plaintext.clear();
-        plaintext += "TODO";
-        plaintext += "TODO";
+        plaintext += encoded_PK_S;
+        plaintext += encoded_SK_S;
         plaintext += sign_sk_ca;
         plaintext += ID_S;
         plaintext += std::to_string(get_epoch_time_seconds()); 
@@ -192,10 +198,15 @@ int main(int argc, char** argv) {
         ciphertext = encrypt_des(k_tmp1, plaintext);
 
         // SEND encrypted msg (new key pair, cert_s, etc...) to client
+        retval_send = send(ca_socket, ciphertext.c_str(), ciphertext.size(), 0);
+        if (retval_send == SOCKET_ERROR) {
+          std::cout << "Error, failed to send" << std::endl;
+          closesocket(ca_socket);
+          WSACleanup();
+          return 1;
+        }
 
-        
-
-
+        break; // CA work is complete (server.cpp will disconnect ...)
       }
     }
 
@@ -258,7 +269,6 @@ std::string sign_rsa(CryptoPP::RSA::PrivateKey SK_CA, std::string message) {
   CryptoPP::AutoSeededRandomPool rng;
   CryptoPP::RSASSA_PKCS1v15_SHA_Signer signer(SK_CA);
   std::string signature; 
-
 
   CryptoPP::StringSource ss1(message, true,
     new CryptoPP::SignerFilter(rng, signer,
