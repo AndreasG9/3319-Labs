@@ -36,7 +36,10 @@
 
 long long int get_epoch_time_seconds();
 std::string encrypt_rsa(CryptoPP::RSA::PublicKey key, CryptoPP::AutoSeededRandomPool rng, std::string plain);
-std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, CryptoPP::AutoSeededRandomPool rng, std::string cipher);
+std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, std::string cipher);
+std::string sign_rsa(CryptoPP::RSA::PrivateKey SK_CA, std::string message);
+
+std::string encrypt_des(std::string key_string, std::string plaintext);
 
 
 
@@ -55,7 +58,6 @@ int main(int argc, char** argv) {
 
   std::string AD_C = "127.0.01:" + std::to_string(port_num);
 
-
   //  ===================== Generate RSA public/private keys and preshare PUBLIC key ===================================================
   CryptoPP::AutoSeededRandomPool rng;
 
@@ -67,14 +69,10 @@ int main(int argc, char** argv) {
 
   // write public key PK_CA to a file, to "preshare"
   // use of CryptoPP to store CryptoPP::RSA::PublicKey in a file (instead of string with {n,e}). 
-
   CryptoPP::Base64Encoder public_key_sink(new CryptoPP::FileSink("public_key.txt"));
   PK_CA.DEREncode(public_key_sink);
   public_key_sink.MessageEnd();
 
-
-
- 
 
   //  ===================== Network Setup (Winsock)  ===================================================
 
@@ -134,7 +132,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  std::cout << "(CA) Connected" << std::endl << std::endl;
+  std::cout << "(CA) Connected to (S)" << std::endl << std::endl;
   closesocket(ca_socket);
 
   char message_receive[BUFFER_LENGTH] = { 0 };
@@ -142,10 +140,76 @@ int main(int argc, char** argv) {
 
   std::string plaintext, ciphertext;
 
+  while (true) {
+    
+    std::cout << "\n (CA) Waiting to receive a message ... \n" << std::endl;
+
+    // server will send RSA_PK_CA[K_tmp1 || ID_S || TS_1] 
+    while ((retval_receive = recv(server_socket, message_receive, BUFFER_LENGTH, 0)) > 0) {
+
+      if (retval_receive > 0) {
+        ciphertext.clear();
+        ciphertext.append(message_receive, retval_receive);
 
 
+        // Decrypt using private key SK_CA to get K_TMP1 || ID_S || TS_1
+        plaintext = decrypt_rsa(SK_CA, ciphertext);
+
+        // Print out ciphertext and temp des key
+        std::cout << "\n***************************************************************" << std::endl;
+        std::cout << "(CA) received ciphertext: " << ciphertext << std::endl;
+        std::cout << "(CA) received K_TMP1 " << plaintext.substr(0, 8) << std::endl;
+        std::cout << "***************************************************************\n" << std::endl;
+
+        //  ===================== STEP 2 ===================================================
+
+        // Extract DES_K_TMP1 from plaintext 
+        std::string k_tmp1 = plaintext.substr(0, 8); // been using 8-byte keys
+
+        // Generate new public/private key pair for S (params defined above, key-size 1024) 
+        CryptoPP::RSA::PrivateKey SK_S(params); // private key 
+        CryptoPP::RSA::PublicKey PK_S(params); // public key
+
+        
+
+        // Build Cert_S = Sign_SK_CA [ID_S || IC_CA || PK_S]
+        std::string sign_sk_ca = ID_S;
+        sign_sk_ca += ID_CA;
+        //sign_sk_ca += PK_S;
+
+        // Sign 
+        sign_sk_ca = sign_rsa(SK_CA, sign_sk_ca); 
+
+        // Build PK_S || SK_S || CERT_S || ID_S || TS_2
+        plaintext.clear();
+        plaintext += "TODO";
+        plaintext += "TODO";
+        plaintext += sign_sk_ca;
+        plaintext += ID_S;
+        plaintext += std::to_string(get_epoch_time_seconds()); 
+
+        // Encrypt using DES_K_TMP1
+        ciphertext = encrypt_des(k_tmp1, plaintext);
+
+        // SEND encrypted msg (new key pair, cert_s, etc...) to client
+
+        
 
 
+      }
+    }
+
+    if (retval_receive <= 0) break; // server disconnected (likely connected to C, as work with CA done))
+  }
+
+
+  // cleanup
+  shutdown(server_socket, SD_SEND);
+  closesocket(server_socket);
+  WSACleanup();
+  std::cout << "CA closed" << std::endl;
+
+  return 0; 
 }
 
 long long int get_epoch_time_seconds() {
@@ -172,12 +236,12 @@ std::string encrypt_rsa(CryptoPP::RSA::PublicKey key, CryptoPP::AutoSeededRandom
   return cipher;
 }
 
-std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, CryptoPP::AutoSeededRandomPool rng, std::string cipher) {
+std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, std::string cipher) {
   // RSA decryption 
 
-  std::string plain;
-
+  CryptoPP::AutoSeededRandomPool rng;
   CryptoPP::RSAES_OAEP_SHA_Decryptor d(key);
+  std::string plain;
 
   CryptoPP::StringSource ss2(cipher, true,
     new CryptoPP::PK_DecryptorFilter(rng, d,
@@ -186,5 +250,46 @@ std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, CryptoPP::AutoSeededRando
   );
 
   return plain;
+}
+
+std::string sign_rsa(CryptoPP::RSA::PrivateKey SK_CA, std::string message) {
+  // rsa signature, do so w/ privatekey 
+
+  CryptoPP::AutoSeededRandomPool rng;
+  CryptoPP::RSASSA_PKCS1v15_SHA_Signer signer(SK_CA);
+  std::string signature; 
+
+
+  CryptoPP::StringSource ss1(message, true,
+    new CryptoPP::SignerFilter(rng, signer,
+      new CryptoPP::StringSink(signature)
+    )
+  );
+
+  return signature;
+}
+
+std::string encrypt_des(std::string key_string, std::string plaintext) {
+
+  CryptoPP::SecByteBlock key((const unsigned char*)(key_string.data()), key_string.size());
+  std::string ciphertext;
+
+  try {
+    CryptoPP::ECB_Mode< CryptoPP::DES >::Encryption encrypt;
+    encrypt.SetKey(key, key.size());
+
+    // Encrypt, add padding if needed 
+    CryptoPP::StringSource(plaintext, true,
+      new CryptoPP::StreamTransformationFilter(encrypt,
+        new CryptoPP::StringSink(ciphertext)
+      )
+    );
+  }
+  catch (const CryptoPP::Exception& err) {
+    std::cerr << "ERROR" << err.what() << std::endl;
+    exit(1);
+  }
+
+  return ciphertext;
 }
 

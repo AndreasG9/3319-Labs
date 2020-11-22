@@ -22,17 +22,21 @@
 #include "cryptopp820/hex.h"
 #include "cryptopp820/secblock.h"
 #include "cryptopp820/modes.h"
+
 #include "cryptopp820/rsa.h"
+#include "cryptopp820/base64.h"
+#include "cryptopp820/files.h"
 
 #define DEFAULT_PORT_NUM 8000 
 #define BUFFER_LENGTH 512 
 
 #define ID_CA "ID-CA"
 #define ID_S "ID-Server"
+#define LIFETIME_SESS 86400
 
 long long int get_epoch_time_seconds(); 
 std::string encrypt_rsa(CryptoPP::RSA::PublicKey key, std::string plain);
-std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, std::string cipher);
+std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, CryptoPP::AutoSeededRandomPool rng, std::string cipher);
 
 
 int main(int argc, char** argv) {
@@ -50,16 +54,29 @@ int main(int argc, char** argv) {
 
   std::string AD_C = "127.0.01:" + std::to_string(port_num);
 
-  // ====================== STEP 1 ("registers" with CA to get own public/private keys and cert) =======
+
+  // Read des_key 
+  //std::string des_key_string;
+  //std::cout << "des_key_string:" << des_key_string << std::cout; 
+
+
+  //  ===================== GET PUBLIC KEY PK_CA  ===================================================
+  // CryptoPP::RSA::PublicKey was encoded and stored in "public_key.txt"
+  // Read, decode, and init CryptoPP::RSA::PublicKey to have CA's public key 
+
+  CryptoPP::ByteQueue bytes;
+  CryptoPP::FileSource file("public_key.txt", true, new CryptoPP::Base64Decoder);
+  file.TransferTo(bytes);
+  bytes.MessageEnd();
+
+  CryptoPP::RSA::PublicKey PK_CA;
+  PK_CA.Load(bytes);
   
+  //  ===================== Network Setup (Winsock) to connect to CA first ===================================================
 
-
-
-  //  ===================== Network Setup (Winsock)  ===================================================
-
-  // Init Winsock
   WSADATA wsa_data;
 
+  // Init Winsock 
   int retval = WSAStartup(MAKEWORD(2, 2), &wsa_data);
   if (retval != 0) {
     std::cout << "Error, WSAStartup failed" << std::endl;
@@ -67,65 +84,84 @@ int main(int argc, char** argv) {
   }
 
   // Prepare sockaddr_in structure
-  struct sockaddr_in server, client;
+  struct sockaddr_in ca;
 
-  server.sin_family = AF_INET;
-  server.sin_addr.s_addr = INADDR_ANY; // default 127.0.0.1 
-  server.sin_port = htons(port_num);  // default is 8000
+  ca.sin_family = AF_INET;
+  ca.sin_addr.s_addr = inet_addr("127.0.0.1");
+  ca.sin_port = htons(port_num); // default is 8000
 
-  // Create Socket (server) 
-  SOCKET server_socket;
+  // Create Socket (server to connect) 
+  SOCKET connected_socket;
 
-  server_socket = socket(AF_INET, SOCK_STREAM, 0);
-  if (server_socket == INVALID_SOCKET) {
+  connected_socket = socket(AF_INET, SOCK_STREAM, 0);
+  if (connected_socket == INVALID_SOCKET) {
     std::cout << "Error, socket creation failed" << std::endl;
     WSACleanup();
     return 1;
   }
 
-  // Bind (server socket address to socket desc.) 
-  retval = bind(server_socket, (struct sockaddr*)&server, sizeof(server));
+  // --------------- Connect to CA -------------------
+  retval = connect(connected_socket, (struct sockaddr*)&ca, sizeof(ca));
   if (retval == SOCKET_ERROR) {
-    std::cout << "Error, failed to bind" << std::endl;
-    closesocket(server_socket);
+    std::cout << "Error, failed to connect" << std::endl;
+    closesocket(connected_socket);
     WSACleanup();
     return 1;
   }
 
-  // Listen
-  retval = listen(server_socket, SOMAXCONN);
-  std::cout << std::endl << "Waiting for incoming connection from 127.0.0.1 on PORT: " << port_num << std::endl;
-  if (retval == SOCKET_ERROR) {
-    std::cout << "Error, failed to listen" << std::endl;
-    closesocket(server_socket);
-    WSACleanup();
-    return 1;
-  }
-
-  // Accept connection (client) 
-  SOCKET client_socket;
-
-  client_socket = accept(server_socket, NULL, NULL);
-  if (client_socket == INVALID_SOCKET) {
-    std::cout << "Error, failed to accept connection" << std::endl;
-    closesocket(server_socket);
-    WSACleanup();
-    return 1;
-  }
-
-  std::cout << "(S) Connected" << std::endl << std::endl;
-  closesocket(server_socket);
+  std::cout << "(S) Connected to (CA)" << std::endl << std::endl;
 
   char message_receive[BUFFER_LENGTH] = { 0 };
   int retval_send = 0, retval_receive = 0;
 
   std::string plaintext, ciphertext; 
 
+  while (true) {
+
+    //  ===================== STEP 1, Register w/ CA ===================================================
+  
+    // temp DES key (testing) CHANGE LATER
+    std::string temp_des = "aBcjEFg4";
+
+    plaintext.clear();
+    plaintext += temp_des; 
+    plaintext += ID_S;
+    plaintext += std::to_string(get_epoch_time_seconds());
+
+    // Encrypt using, CA's public key: PK_CA
+    ciphertext = encrypt_rsa(PK_CA, plaintext);
+
+
+    do {
+      // Prompt server if ready to register with CA
+      std::cout << "Register with CA (RSA_PK_CA[K_TMP1 || ID_S || TS_1])? hit any key to confirm ...\n";
+    } while (std::cin.get() != '\n');
+
+
+    // Send info to register with CA 
+    retval_send = send(connected_socket, ciphertext.c_str(), ciphertext.size(), 0);
+    if (retval_send == SOCKET_ERROR) {
+      std::cout << "Error, failed to send" << std::endl;
+      closesocket(connected_socket);
+      WSACleanup();
+      return 1;
+    }
+
+    std::cout << "\n(S) Waiting to receive a message from CA ... \n" << std::endl;
 
 
 
+  }
 
 
+  // close old socket
+
+  // CONNECT to C (client.cpp)
+
+  //shutdown(connected_socket2, SD_SEND);
+  //closesocket(connected_socket2);
+  //WSACleanup();
+  std::cout << "(S) Server closed" << std::endl;
 
 
   return 0; 
@@ -142,14 +178,36 @@ long long int get_epoch_time_seconds() {
 std::string encrypt_rsa(CryptoPP::RSA::PublicKey key, std::string plain) {
   // RSA encryption (RSAES encryption scheme (OAEP using SHA-256). use CryptoPP filters to do so ...)
 
+  CryptoPP::AutoSeededRandomPool rng; 
+  CryptoPP::RSAES_OAEP_SHA_Encryptor e(key);
+  std::string cipher;
 
+  CryptoPP::StringSource(plain, true,
+    new CryptoPP::PK_EncryptorFilter(rng, e,
+      new CryptoPP::StringSink(cipher)
+    )
+  );
 
-
-  return ""; 
+  return cipher;
 }
 
-std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, std::string cipher) {
+std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, CryptoPP::AutoSeededRandomPool rng, std::string cipher) {
+  // RSA decryption 
 
+  std::string plain;
 
-  return "";
+  CryptoPP::RSAES_OAEP_SHA_Decryptor d(key);
+
+  CryptoPP::StringSource ss2(cipher, true,
+    new CryptoPP::PK_DecryptorFilter(rng, d,
+      new CryptoPP::StringSink(plain)
+    )
+  );
+
+  return plain;
 }
+
+
+
+
+
