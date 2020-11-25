@@ -31,6 +31,7 @@
 #define BUFFER_LENGTH 1024 
 
 #define ID_CA "ID-CA"
+#define ID_C "ID-Client"
 #define ID_S "ID-Server"
 #define LIFETIME_SESS 86400
 
@@ -39,8 +40,9 @@ std::string gen_tmp_key();
 std::string encode_hex(std::string ct); 
 
 std::string encrypt_rsa(CryptoPP::RSA::PublicKey key, std::string plain);
-std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, CryptoPP::AutoSeededRandomPool rng, std::string cipher);
+std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, std::string cipher);
 
+std::string encrypt_des(std::string key_string, std::string plaintext);
 std::string decrypt_des(std::string key_string, std::string ciphertext); 
 
 
@@ -56,14 +58,6 @@ int main(int argc, char** argv) {
     std::cout << "Too many args, include the port num or nothing";
     exit(1);
   }
-
-  std::string AD_C = "127.0.01:" + std::to_string(port_num);
-
-
-  // Read des_key 
-  //std::string des_key_string;
-  //std::cout << "des_key_string:" << des_key_string << std::cout; 
-
 
   //  ===================== GET PUBLIC KEY PK_CA  ===================================================
   // CryptoPP::RSA::PublicKey was encoded and stored in "public_key.txt"
@@ -176,7 +170,7 @@ int main(int argc, char** argv) {
         plaintext = decrypt_des(temp_des, ciphertext);
 
         
-        // Extract PK_S (using 1024 RSA::PublicKey/RSA::PrviateKey sizes, but encoded to be sent as c++ strings, so exact size tricky
+        // Extract PK_S (using 1024 bit RSA::PublicKey/RSA::PrviateKey sizes, but encoded to be sent as c++ strings, so exact size tricky
         // but the first three bytes will contain the size of the one key (and same for next key) 
         // encoded, each key will then  be between 630-634 bytes or somewhere between there, but will differ each time execute as different keys generated)
         int key_length = std::stoi(plaintext.substr(0, 3));
@@ -223,14 +217,14 @@ int main(int argc, char** argv) {
   shutdown(connected_socket, SD_SEND);
   closesocket(connected_socket);
 
-  // CLIENT connects to US!
+  // CLIENT connects to US, the server!
   
   // Prepare sockaddr_in structure
   struct sockaddr_in server, client;
 
   server.sin_family = AF_INET;
   server.sin_addr.s_addr = INADDR_ANY; // default 127.0.0.1 
-  server.sin_port = htons(port_num);  // default is 8001
+  server.sin_port = htons(port_num);  // default is 8000
 
   // Create Socket (server) 
   SOCKET server_socket;
@@ -278,7 +272,7 @@ int main(int argc, char** argv) {
 
   // will still use strings: plaintext, ciphertext, CERT_S
   // will still use key-pair: CryptoPP::RSA::PrivateKey SK_S, CryptoPP::RSA::PublicKey PK_S 
-  std::string encoded_PK_S, encoded_SK_S;
+  std::string encoded_PK_S, encoded_SK_S, K_TMP2;
 
   while (true) {
 
@@ -290,16 +284,9 @@ int main(int argc, char** argv) {
         plaintext.clear();
         plaintext.append(message_receive, retval_receive);
 
-
-        // public key's {n, e}
-        const CryptoPP::Integer& public_n = PK_S.GetModulus();
-        const CryptoPP::Integer& public_e = PK_S.GetPublicExponent();
-
         // Print out received plaintext
         std::cout << "\n***************************************************************" << std::endl;
         std::cout << "(S) received plaintext: " << plaintext << std::endl;
-        std::cout << "(S) received plaintext split with PK_S decoded: \nn:" << public_n << "\ne: " << public_e << std::endl;
-        std::cout << "(S) received plaintext split for TS_4 : " << plaintext.substr(plaintext.size() - 10) << std::endl;
         std::cout << "***************************************************************\n" << std::endl;
 
         break;
@@ -311,9 +298,13 @@ int main(int argc, char** argv) {
       CryptoPP::StringSink sink(encoded_PK_S);
       PK_S.DEREncode(sink); // to c++ string
 
+      std::string encoded_str_encoded_hex = encode_hex(encoded_PK_S);
+      int size = encoded_str_encoded_hex.size();
+
       plaintext.clear();
-      plaintext += encoded_PK_S;
-      plaintext += CERT_S;
+      plaintext += std::to_string(size); // both keys are fixed to 1024 bits, but encode to c++ string to be sent to client, which varies the size (no longer RSA::PublicKey fixed) ...
+      plaintext += encode_hex(encoded_PK_S);
+      plaintext += encode_hex(CERT_S);
       plaintext += std::to_string(get_epoch_time_seconds());
 
       // send plaintext message 
@@ -325,31 +316,74 @@ int main(int argc, char** argv) {
         return 1;
       }
 
+      // public key's {n, e}
+      const CryptoPP::Integer& public_n = PK_S.GetModulus();
+      const CryptoPP::Integer& public_e = PK_S.GetPublicExponent();
+
       // Print out sent plaintext
       std::cout << "\n***************************************************************" << std::endl;
-      std::cout << "(S) sent plaintext: " << plaintext << std::endl;
+      std::cout << "(S) sent plaintext (HEX encoded): " << plaintext << std::endl;
+      std::cout << "(S) sent plaintext split with PK_S decoded: \nn:" << public_n << "\ne: " << public_e << std::endl;
+      std::cout << "(S) sent plaintext split for Cert_s (HEX encoded): " << encode_hex(CERT_S) << std::endl;
+      std::cout << "(S) sent plaintext split for TS_4 : " << plaintext.substr(plaintext.size() - 10) << std::endl;
       std::cout << "***************************************************************\n" << std::endl;
 
-
-    // Extract TS_4
-
-    // =========================== STEP 4 ==========================
-
-
-
+   
     // receive RSA_PK_S[K_TMP_2 || ID_C || IP_C || PORT_C || TS_5]
+      while ((retval_receive = recv(client_socket, message_receive, BUFFER_LENGTH, 0)) > 0) {
+
+        if (retval_receive > 0) {
+          ciphertext.clear();
+          ciphertext.append(message_receive, retval_receive);
+           
+          // RSA decrypt ciphertext (using SK_S)
+          plaintext = decrypt_rsa(SK_S, ciphertext);
+
+          // Extract K_TMP2 (first 8-bytes)
+          K_TMP2 = plaintext.substr(0, 8);
+
+          // Print received ciphertext and K_TMP2
+          std::cout << "\n***************************************************************" << std::endl;
+          std::cout << "(S) received ciphertext (HEX encoded): " << encode_hex(ciphertext) << std::endl;
+          std::cout << "(S) received K_TMP2: " << K_TMP2 << std::endl;
+          std::cout << "***************************************************************\n" << std::endl;
+
+          break;
+        }
+
+        // =========================== STEP 6 ==========================
+        // DES_K_TMP2[K_SESS || LIFETIME_SESS || ID_C || TS_6]
+
+        plaintext = gen_tmp_key(); // K_SESS
+        plaintext += std::to_string(LIFETIME_SESS);
+        plaintext += ID_C;
+        plaintext += std::to_string(get_epoch_time_seconds()); // TS_6
+
+        // DES encrypt using K_TMP2
+        ciphertext = encrypt_des(K_TMP2, plaintext);
+
+        // send ciphertext message 
+        retval_send = send(client_socket, ciphertext.c_str(), ciphertext.size(), 0);
+        if (retval_send == SOCKET_ERROR) {
+          std::cout << "Error, failed to send" << std::endl;
+          closesocket(client_socket);
+          WSACleanup();
+          return 1;
+        }
+
+        // Print sent ciphertext and K_SESS
+        std::cout << "\n***************************************************************" << std::endl;
+        std::cout << "(S) sent ciphertext (HEX encoded): " << encode_hex(ciphertext) << std::endl << std::endl;
+        std::cout << "(S) generated K_SESS: " << plaintext.substr(0, 8) << std::endl;
+        std::cout << "***************************************************************\n" << std::endl;
 
 
-    // Extract K_TMP2
+        // receive DES_K_SESS[req || TS_7]
 
 
-    // =========================== STEP 6 ==========================
-    // DES_K_tmp2[K_sess || LIFETIME_SESS || ID_C || TS_6]
-    
-    std::string k_sess = gen_tmp_key();
+      }
 
 
-    // receive DES_K_SESS[req || TS_7]
 
 
     break; 
@@ -416,10 +450,11 @@ std::string encrypt_rsa(CryptoPP::RSA::PublicKey key, std::string plain) {
   return cipher;
 }
 
-std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, CryptoPP::AutoSeededRandomPool rng, std::string cipher) {
+std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, std::string cipher) {
   // RSA decryption 
 
   std::string plain;
+  CryptoPP::AutoSeededRandomPool rng;
 
   CryptoPP::RSAES_OAEP_SHA_Decryptor d(key);
 
@@ -430,6 +465,30 @@ std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, CryptoPP::AutoSeededRando
   );
 
   return plain;
+}
+
+std::string encrypt_des(std::string key_string, std::string plaintext) {
+
+  CryptoPP::SecByteBlock key((const unsigned char*)(key_string.data()), key_string.size());
+  std::string ciphertext;
+
+  try {
+    CryptoPP::ECB_Mode< CryptoPP::DES >::Encryption encrypt;
+    encrypt.SetKey(key, key.size());
+
+    // Encrypt, add padding if needed 
+    CryptoPP::StringSource(plaintext, true,
+      new CryptoPP::StreamTransformationFilter(encrypt,
+        new CryptoPP::StringSink(ciphertext)
+      )
+    );
+  }
+  catch (const CryptoPP::Exception& err) {
+    std::cerr << "ERROR" << err.what() << std::endl;
+    exit(1);
+  }
+
+  return ciphertext;
 }
 
 std::string decrypt_des(std::string key_string, std::string ciphertext) {

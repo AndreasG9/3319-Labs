@@ -56,7 +56,10 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
-  std::string AD_C = "127.0.01:" + std::to_string(port_num);
+  //std::string AD_C = "127.0.01:" + std::to_string(port_num);
+
+  std::string IP_C = "127.0.01";
+  std::string PORT_C = std::to_string(port_num); 
 
   //  ===================== Network Setup (Winsock) to connect to S ===================================================
   WSADATA wsa_data;
@@ -99,7 +102,8 @@ int main(int argc, char** argv) {
   char message_receive[BUFFER_LENGTH] = { 0 };
   int retval_send = 0, retval_receive = 0;
 
-  std::string plaintext;
+  std::string plaintext, ciphertext, K_TMP2, K_SESS;
+  CryptoPP::RSA::PublicKey PK_S;
 
   while (true) {
 
@@ -123,13 +127,10 @@ int main(int argc, char** argv) {
       return 1;
     }
 
-
-
     // Print sent plaintext 
     std::cout << "\n***************************************************************" << std::endl;
-    std::cout << "(C) sent plaintext is: " << plaintext << std::endl << std::endl;;
+    std::cout << "(C) sent plaintext is: " << plaintext << std::endl << std::endl;
     std::cout << "****************************************************************\n" << std::endl;
-
 
     std::cout << "\n(C) Waiting to receive a message from S ... \n" << std::endl;
 
@@ -140,10 +141,85 @@ int main(int argc, char** argv) {
         plaintext.clear();
         plaintext.append(message_receive, retval_receive);
 
+        // Extract PK_S
+        // b/c RSA::PublicKey encoded to c++ string, it size no longer fixed to 1024 bits, it varied, so first 3 bytes will include the size of RSA::PublicKey 
+        
+        int key_size = std::stoi(plaintext.substr(0, 3));
+        std::string public_key_string_encoded = plaintext.substr(3, key_size);
+
+        // Display ciphertext as HEX
+        std::string public_key_string;
+        CryptoPP::StringSource(public_key_string_encoded, true,
+          new CryptoPP::HexDecoder(
+            new CryptoPP::StringSink(public_key_string)
+          )
+        );
+
+        // Decode key to RSA::PublicKey format
+        CryptoPP::StringSource ss(public_key_string, true);
+        PK_S.BERDecode(ss);
+
+        // public key's {n, e}
+        const CryptoPP::Integer& public_n = PK_S.GetModulus();
+        const CryptoPP::Integer& public_e = PK_S.GetPublicExponent();
 
         // Print received plaintext 
         std::cout << "\n***************************************************************" << std::endl;
-        std::cout << "(C) received plaintext is: " << plaintext << std::endl << std::endl;;
+        std::cout << "(C) received plaintext (with PK_S and CERT_S HEX encoded): " << plaintext << std::endl << std::endl;
+        std::cout << "(C) received plaintext split to display PK_S HEX decoded: \n" << "n: "  << public_n << "\ne: " << public_e << std::endl << std::endl;
+        std::cout << "****************************************************************\n" << std::endl;
+
+        break;
+      }
+    }
+
+    // ========================= STEP 5 ================================
+    // build RSA_PK_S[K_TMP_2 || ID_C || IP_C || PORT_C || TS_5]
+
+    K_TMP2 = gen_tmp_key(); // 8-byte K_TMP2
+
+    plaintext = K_TMP2; 
+    plaintext += ID_C;
+    plaintext += IP_C;
+    plaintext += PORT_C;
+    plaintext += std::to_string(get_epoch_time_seconds()); // TS_5
+
+    // RSA encrypt w/ PK_S
+    ciphertext = encrypt_rsa(PK_S, plaintext);
+
+    // send step 5 to S
+    retval_send = send(connected_socket, ciphertext.c_str(), ciphertext.size(), 0);
+    if (retval_send == SOCKET_ERROR) {
+      std::cout << "Error, failed to send" << std::endl;
+      closesocket(connected_socket);
+      WSACleanup();
+      return 1;
+    }
+
+    
+
+    // Print sent ciphertext
+    std::cout << "\n***************************************************************" << std::endl;
+    std::cout << "(C) sent ciphertext (HEX encoded): " << encode_hex(ciphertext) << std::endl << std::endl;
+    std::cout << "(C) generated K_TMP2: " << K_TMP2 << std::endl << std::endl;
+    std::cout << "****************************************************************\n" << std::endl;
+
+    // receive step 6 DES_K_TMP2[K_SESS || LIFETIME_SESS || ID_C || TS_6]
+    while ((retval_receive = recv(connected_socket, message_receive, BUFFER_LENGTH, 0)) > 0) {
+
+      if (retval_receive > 0) {
+        ciphertext.clear();
+        ciphertext.append(message_receive, retval_receive);
+
+        // Decrypt using K_TMP2
+        plaintext = decrypt_des(K_TMP2, ciphertext);
+
+        K_SESS = plaintext.substr(0, 8);
+
+        // Print received ciphertext and K_SESS
+        std::cout << "\n***************************************************************" << std::endl;
+        std::cout << "(C) received ciphertext (HEX encoded): " << encode_hex(ciphertext) << std::endl << std::endl;
+        std::cout << "(C) received  K_SESS: " << K_SESS << std::endl << std::endl;
         std::cout << "****************************************************************\n" << std::endl;
 
         break;
