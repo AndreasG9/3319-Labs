@@ -220,30 +220,136 @@ int main(int argc, char** argv) {
 
 
   // close old socket
+  shutdown(connected_socket, SD_SEND);
+  closesocket(connected_socket);
+
+  // CLIENT connects to US!
+  
+  // Prepare sockaddr_in structure
+  struct sockaddr_in server, client;
+
+  server.sin_family = AF_INET;
+  server.sin_addr.s_addr = INADDR_ANY; // default 127.0.0.1 
+  server.sin_port = htons(port_num);  // default is 8001
+
+  // Create Socket (server) 
+  SOCKET server_socket;
+
+  server_socket = socket(AF_INET, SOCK_STREAM, 0);
+  if (server_socket == INVALID_SOCKET) {
+    std::cout << "Error, socket creation failed" << std::endl;
+    WSACleanup();
+    return 1;
+  }
+
+  // Bind (server socket address to socket desc.) 
+  retval = bind(server_socket, (struct sockaddr*)&server, sizeof(server));
+  if (retval == SOCKET_ERROR) {
+    std::cout << "Error, failed to bind" << std::endl;
+    closesocket(server_socket);
+    WSACleanup();
+    return 1;
+  }
+
+  // Listen
+  retval = listen(server_socket, SOMAXCONN);
+  std::cout << std::endl << "Waiting for incoming connection from 127.0.0.1 on PORT: " << port_num << std::endl;
+  if (retval == SOCKET_ERROR) {
+    std::cout << "Error, failed to listen" << std::endl;
+    closesocket(server_socket);
+    WSACleanup();
+    return 1;
+  }
+
+  // Accept connection (client) 
+  SOCKET client_socket;
+
+  client_socket = accept(server_socket, NULL, NULL);
+  if (client_socket == INVALID_SOCKET) {
+    std::cout << "Error, failed to accept connection" << std::endl;
+    closesocket(server_socket);
+    WSACleanup();
+    return 1;
+  }
+
+  std::cout << "(S) Connected to (C)" << std::endl << std::endl;
+  closesocket(server_socket);
 
 
-  // CONNECT to C (client.cpp)
-
+  // will still use strings: plaintext, ciphertext, CERT_S
+  // will still use key-pair: CryptoPP::RSA::PrivateKey SK_S, CryptoPP::RSA::PublicKey PK_S 
+  std::string encoded_PK_S, encoded_SK_S;
 
   while (true) {
 
     // receive ID || TS3
-    
+    while ((retval_receive = recv(client_socket, message_receive, BUFFER_LENGTH, 0)) > 0) {
+
+      if (retval_receive > 0) {
+        // store received pt in c++ string 
+        plaintext.clear();
+        plaintext.append(message_receive, retval_receive);
+
+
+        // public key's {n, e}
+        const CryptoPP::Integer& public_n = PK_S.GetModulus();
+        const CryptoPP::Integer& public_e = PK_S.GetPublicExponent();
+
+        // Print out received plaintext
+        std::cout << "\n***************************************************************" << std::endl;
+        std::cout << "(S) received plaintext: " << plaintext << std::endl;
+        std::cout << "(S) received plaintext split with PK_S decoded: \nn:" << public_n << "\ne: " << public_e << std::endl;
+        std::cout << "(S) received plaintext split for TS_4 : " << plaintext.substr(plaintext.size() - 10) << std::endl;
+        std::cout << "***************************************************************\n" << std::endl;
+
+        break;
+      }
+
+    }
+
+      // =========================== STEP 4 ==========================
+      CryptoPP::StringSink sink(encoded_PK_S);
+      PK_S.DEREncode(sink); // to c++ string
+
+      plaintext.clear();
+      plaintext += encoded_PK_S;
+      plaintext += CERT_S;
+      plaintext += std::to_string(get_epoch_time_seconds());
+
+      // send plaintext message 
+      retval_send = send(client_socket, plaintext.c_str(), plaintext.size(), 0);
+      if (retval_send == SOCKET_ERROR) {
+        std::cout << "Error, failed to send" << std::endl;
+        closesocket(client_socket);
+        WSACleanup();
+        return 1;
+      }
+
+      // Print out sent plaintext
+      std::cout << "\n***************************************************************" << std::endl;
+      std::cout << "(S) sent plaintext: " << plaintext << std::endl;
+      std::cout << "***************************************************************\n" << std::endl;
+
 
     // Extract TS_4
 
     // =========================== STEP 4 ==========================
-    //plaintext.clear();
-    //plaintext += PK_S;
-    //plaintext += CERT_S;
-    //plaintext += "TS_4";
 
-    // send plaintext message 
 
-    // receive RSA_PK_S[K_TMP_2 || ID_C || IP_C || PORT_C || TS_%]
+
+    // receive RSA_PK_S[K_TMP_2 || ID_C || IP_C || PORT_C || TS_5]
+
 
     // Extract K_TMP2
 
+
+    // =========================== STEP 6 ==========================
+    // DES_K_tmp2[K_sess || LIFETIME_SESS || ID_C || TS_6]
+    
+    std::string k_sess = gen_tmp_key();
+
+
+    // receive DES_K_SESS[req || TS_7]
 
 
     break; 
