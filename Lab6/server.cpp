@@ -43,8 +43,7 @@ std::string encrypt_rsa(CryptoPP::RSA::PublicKey key, std::string plain);
 std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, std::string cipher);
 
 std::string encrypt_des(std::string key_string, std::string plaintext);
-std::string decrypt_des(std::string key_string, std::string ciphertext); 
-
+std::string decrypt_des(std::string key_string, std::string ciphertext);
 
 int main(int argc, char** argv) {
 
@@ -272,7 +271,7 @@ int main(int argc, char** argv) {
 
   // will still use strings: plaintext, ciphertext, CERT_S
   // will still use key-pair: CryptoPP::RSA::PrivateKey SK_S, CryptoPP::RSA::PublicKey PK_S 
-  std::string encoded_PK_S, encoded_SK_S, K_TMP2;
+  std::string encoded_PK_S, encoded_SK_S, K_TMP2, K_SESS;
 
   while (true) {
 
@@ -335,7 +334,7 @@ int main(int argc, char** argv) {
         if (retval_receive > 0) {
           ciphertext.clear();
           ciphertext.append(message_receive, retval_receive);
-           
+
           // RSA decrypt ciphertext (using SK_S)
           plaintext = decrypt_rsa(SK_S, ciphertext);
 
@@ -350,53 +349,95 @@ int main(int argc, char** argv) {
 
           break;
         }
-
-        // =========================== STEP 6 ==========================
-        // DES_K_TMP2[K_SESS || LIFETIME_SESS || ID_C || TS_6]
-
-        plaintext = gen_tmp_key(); // K_SESS
-        plaintext += std::to_string(LIFETIME_SESS);
-        plaintext += ID_C;
-        plaintext += std::to_string(get_epoch_time_seconds()); // TS_6
-
-        // DES encrypt using K_TMP2
-        ciphertext = encrypt_des(K_TMP2, plaintext);
-
-        // send ciphertext message 
-        retval_send = send(client_socket, ciphertext.c_str(), ciphertext.size(), 0);
-        if (retval_send == SOCKET_ERROR) {
-          std::cout << "Error, failed to send" << std::endl;
-          closesocket(client_socket);
-          WSACleanup();
-          return 1;
-        }
-
-        // Print sent ciphertext and K_SESS
-        std::cout << "\n***************************************************************" << std::endl;
-        std::cout << "(S) sent ciphertext (HEX encoded): " << encode_hex(ciphertext) << std::endl << std::endl;
-        std::cout << "(S) generated K_SESS: " << plaintext.substr(0, 8) << std::endl;
-        std::cout << "***************************************************************\n" << std::endl;
-
-
-        // receive DES_K_SESS[req || TS_7]
-
-
       }
 
+      // =========================== STEP 6 ==========================
+      // DES_K_TMP2[K_SESS || LIFETIME_SESS || ID_C || TS_6]
 
+      plaintext = gen_tmp_key(); // K_SESS
+      plaintext += std::to_string(LIFETIME_SESS);
+      plaintext += ID_C;
+      plaintext += std::to_string(get_epoch_time_seconds()); // TS_6
 
+      // DES encrypt using K_TMP2
+      ciphertext = encrypt_des(K_TMP2, plaintext);
 
-    break; 
+      std::cout << "sending step 6!\n";
+
+      // send ciphertext message 
+      retval_send = send(client_socket, ciphertext.c_str(), ciphertext.size(), 0);
+      if (retval_send == SOCKET_ERROR) {
+        std::cout << "Error, failed to send" << std::endl;
+        closesocket(client_socket);
+        WSACleanup();
+        return 1;
+      }
+
+      K_SESS = plaintext.substr(0, 8);
+
+      // Print sent ciphertext and K_SESS
+      std::cout << "\n***************************************************************" << std::endl;
+      std::cout << "(S) sent ciphertext (HEX encoded): " << encode_hex(ciphertext) << std::endl << std::endl;
+      std::cout << "(S) generated K_SESS: " << K_SESS << std::endl;
+      std::cout << "***************************************************************\n" << std::endl;
+
+      // receive DES_K_SESS[req || TS_7]
+      while ((retval_receive = recv(client_socket, message_receive, BUFFER_LENGTH, 0)) > 0) {
+
+        if (retval_receive > 0) {
+          ciphertext.clear();
+          ciphertext.append(message_receive, retval_receive);
+
+          // Decrypt des using K_SESS
+          plaintext = decrypt_des(K_SESS, ciphertext);
+
+          int size = plaintext.size();
+          std::string req = plaintext.substr(0, size - 10); // TS_7 will by 10 bytes, so req is all the string before that point
+
+          // Print received ciphertext and req 
+          std::cout << "\n***************************************************************" << std::endl;
+          std::cout << "(S) received ciphertext (HEX encoded): " << encode_hex(ciphertext) << std::endl;
+          std::cout << "(S) received req message: " << req << std::endl;
+          std::cout << "***************************************************************\n" << std::endl;
+
+          break;
+        }
+      }
+
+      // =========================== STEP 8 ==========================
+      // DES_K_SESS[data || TS_8]
+
+      plaintext = "take cis3319 class this morning";
+      plaintext += std::to_string(get_epoch_time_seconds()); // TS_8
+
+      ciphertext = encrypt_des(K_SESS, plaintext); 
+
+      // send ciphertext message 
+      retval_send = send(client_socket, ciphertext.c_str(), ciphertext.size(), 0);
+      if (retval_send == SOCKET_ERROR) {
+        std::cout << "Error, failed to send" << std::endl;
+        closesocket(client_socket);
+        WSACleanup();
+        return 1;
+      }
+
+      // Print sent ciphertext and K_SESS
+      std::cout << "\n***************************************************************" << std::endl;
+      std::cout << "(S) sent ciphertext (HEX encoded): " << encode_hex(ciphertext) << std::endl;
+      std::cout << "***************************************************************\n" << std::endl;
+      
+    break; // done w/ client
   }
 
-  //shutdown(connected_socket2, SD_SEND);
-  //closesocket(connected_socket2);
-  //WSACleanup();
+  shutdown(client_socket, SD_SEND);
+  closesocket(client_socket);
+  WSACleanup();
   std::cout << "(S) Server closed" << std::endl;
 
 
   return 0; 
 }
+
 
 long long int get_epoch_time_seconds() {
   // get time stamp (epoch equivalent) 
@@ -466,6 +507,7 @@ std::string decrypt_rsa(CryptoPP::RSA::PrivateKey key, std::string cipher) {
 
   return plain;
 }
+
 
 std::string encrypt_des(std::string key_string, std::string plaintext) {
 

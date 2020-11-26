@@ -33,6 +33,7 @@
 #define ID_CA "ID-CA"
 #define ID_C "ID-Client"
 #define ID_S "ID-Server"
+#define req "memo"
 
 long long int get_epoch_time_seconds();
 std::string gen_tmp_key();
@@ -40,6 +41,7 @@ std::string encode_hex(std::string ct);
 
 std::string encrypt_rsa(CryptoPP::RSA::PublicKey key, std::string plain);
 
+std::string encrypt_des(std::string key_string, std::string plaintext);
 std::string decrypt_des(std::string key_string, std::string ciphertext);
 
 
@@ -187,6 +189,11 @@ int main(int argc, char** argv) {
     // RSA encrypt w/ PK_S
     ciphertext = encrypt_rsa(PK_S, plaintext);
 
+    do {
+      // Prompt user if ready to send msg to S
+      std::cout << "Send msg to S (step 5)? hit any key to confirm ...\n";
+    } while (std::cin.get() != '\n');
+
     // send step 5 to S
     retval_send = send(connected_socket, ciphertext.c_str(), ciphertext.size(), 0);
     if (retval_send == SOCKET_ERROR) {
@@ -195,8 +202,6 @@ int main(int argc, char** argv) {
       WSACleanup();
       return 1;
     }
-
-    
 
     // Print sent ciphertext
     std::cout << "\n***************************************************************" << std::endl;
@@ -226,12 +231,61 @@ int main(int argc, char** argv) {
       }
     }
 
+    // ========================= STEP 7 ================================
+    std::cout << "STEP 7!" << std::endl;
+    plaintext = req; // req is "memo"
+    plaintext += std::to_string(get_epoch_time_seconds()); // TS_7
 
+    ciphertext = encrypt_des(K_SESS, plaintext);
+
+    do {
+      // Prompt user if ready to send msg to S
+      std::cout << "Send msg to S (DES_K_SESS[req || TS_7)? hit any key to confirm ...\n";
+    } while (std::cin.get() != '\n');
+
+    // send DES_K_SESS[req || TS_7]
+    retval_send = send(connected_socket, ciphertext.c_str(), ciphertext.size(), 0);
+    if (retval_send == SOCKET_ERROR) {
+      std::cout << "Error, failed to send" << std::endl;
+      closesocket(connected_socket);
+      WSACleanup();
+      return 1;
+    }
+
+    // Print sent ciphertext
+    std::cout << "\n***************************************************************" << std::endl;
+    std::cout << "(C) sent ciphertext (HEX encoded): " << encode_hex(ciphertext) << std::endl << std::endl;
+    std::cout << "****************************************************************\n" << std::endl;
+
+    // receive DES_K_SESS[data || TS_8]
+    while ((retval_receive = recv(connected_socket, message_receive, BUFFER_LENGTH, 0)) > 0) {
+
+      if (retval_receive > 0) {
+        ciphertext.clear();
+        ciphertext.append(message_receive, retval_receive);
+
+        plaintext = decrypt_des(K_SESS, ciphertext);
+
+        int pt_size = plaintext.size();
+        std::string data = plaintext.substr(0, pt_size - 10); // last 10 bytes TS_8
+
+        // Print received ciphertext and data
+        std::cout << "\n***************************************************************" << std::endl;
+        std::cout << "(C) received ciphertext (HEX encoded): " << encode_hex(ciphertext) << std::endl << std::endl;
+        std::cout << "(C) received data message: " <<  data << std::endl << std::endl;
+        std::cout << "****************************************************************\n" << std::endl;
+
+        break;
+      }
+    }
+    break; // done
   }
   
   shutdown(connected_socket, SD_SEND);
   closesocket(connected_socket);
   WSACleanup();
+
+  std::cout << "(C) closed" << std::endl;
 
   return 0; 
 }
@@ -312,4 +366,29 @@ std::string decrypt_des(std::string key_string, std::string ciphertext) {
   }
 
   return plaintext;
+}
+
+std::string encrypt_des(std::string key_string, std::string plaintext) {
+
+  CryptoPP::SecByteBlock key((const unsigned char*)(key_string.data()), key_string.size());
+  std::string ciphertext;
+
+  try {
+    CryptoPP::ECB_Mode< CryptoPP::DES >::Encryption encrypt;
+    encrypt.SetKey(key, key.size());
+
+    // Encrypt, add padding if needed 
+    CryptoPP::StringSource(plaintext, true,
+      new CryptoPP::StreamTransformationFilter(encrypt,
+        new CryptoPP::StringSink(ciphertext)
+      )
+    );
+  }
+
+  catch (const CryptoPP::Exception& err) {
+    std::cerr << "ERROR" << err.what() << std::endl;
+    exit(1);
+  }
+
+  return ciphertext;
 }
