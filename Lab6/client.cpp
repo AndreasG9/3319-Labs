@@ -38,8 +38,10 @@
 long long int get_epoch_time_seconds();
 std::string gen_tmp_key();
 std::string encode_hex(std::string ct);
+std::string decode_hex(std::string encoded);
 
 std::string encrypt_rsa(CryptoPP::RSA::PublicKey key, std::string plain);
+void verifyRSA(CryptoPP::RSA::PublicKey key, std::string signature, std::string msg);
 
 std::string encrypt_des(std::string key_string, std::string plaintext);
 std::string decrypt_des(std::string key_string, std::string ciphertext);
@@ -58,10 +60,20 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
-  //std::string AD_C = "127.0.01:" + std::to_string(port_num);
-
   std::string IP_C = "127.0.01";
   std::string PORT_C = std::to_string(port_num); 
+
+  //  ===================== GET PUBLIC KEY PK_CA  ===================================================
+  // CryptoPP::RSA::PublicKey was encoded and stored in "public_key.txt"
+  // Read, decode, and init CryptoPP::RSA::PublicKey to have CA's public key 
+
+  CryptoPP::ByteQueue bytes;
+  CryptoPP::FileSource file("public_key.txt", true, new CryptoPP::Base64Decoder);
+  file.TransferTo(bytes);
+  bytes.MessageEnd();
+
+  CryptoPP::RSA::PublicKey PK_CA;
+  PK_CA.Load(bytes);
 
   //  ===================== Network Setup (Winsock) to connect to S ===================================================
   WSADATA wsa_data;
@@ -149,7 +161,7 @@ int main(int argc, char** argv) {
         int key_size = std::stoi(plaintext.substr(0, 3));
         std::string public_key_string_encoded = plaintext.substr(3, key_size);
 
-        // Display ciphertext as HEX
+        // Decode HEX
         std::string public_key_string;
         CryptoPP::StringSource(public_key_string_encoded, true,
           new CryptoPP::HexDecoder(
@@ -164,6 +176,26 @@ int main(int argc, char** argv) {
         // public key's {n, e}
         const CryptoPP::Integer& public_n = PK_S.GetModulus();
         const CryptoPP::Integer& public_e = PK_S.GetPublicExponent();
+
+        // VERIFY CERT_S, using CA's public key
+        int current_size = key_size + 3;
+        int end_cert_s = plaintext.size() - 10 - 3 - key_size; 
+
+        std::string cert_s_hex_encoded = plaintext.substr(current_size, end_cert_s);
+        std::string cert_s = decode_hex(cert_s_hex_encoded);
+
+        // Build msg, to follow CryptoPP signature scheme
+        // to verify (msg + signature) 
+        std::string msg = ID_S;
+        msg += ID_CA;
+
+        std::string encoded_PK_S;
+        CryptoPP::StringSink sink(encoded_PK_S);
+        PK_S.DEREncode(sink);
+        msg += encoded_PK_S;
+
+        verifyRSA(PK_CA, cert_s, msg); // will throw an exception is not verified, (quit the program ) OTHERWISE, PK_S is to be trusted
+
 
         // Print received plaintext 
         std::cout << "\n***************************************************************" << std::endl;
@@ -232,7 +264,6 @@ int main(int argc, char** argv) {
     }
 
     // ========================= STEP 7 ================================
-    std::cout << "STEP 7!" << std::endl;
     plaintext = req; // req is "memo"
     plaintext += std::to_string(get_epoch_time_seconds()); // TS_7
 
@@ -323,7 +354,19 @@ std::string encode_hex(std::string ct) {
   );
 
   return encoded;
+}
 
+std::string decode_hex(std::string encoded) {
+
+  std::string decoded;
+
+  CryptoPP::StringSource(encoded, true,
+    new CryptoPP::HexDecoder(
+      new CryptoPP::StringSink(decoded)
+    )
+  );
+
+  return decoded; 
 }
 
 std::string encrypt_rsa(CryptoPP::RSA::PublicKey key, std::string plain) {
@@ -391,4 +434,22 @@ std::string encrypt_des(std::string key_string, std::string plaintext) {
   }
 
   return ciphertext;
+}
+
+void verifyRSA(CryptoPP::RSA::PublicKey key, std::string signature, std::string msg) {
+  // using ca's public key, verify rsa signature
+
+  //RSA signature verification (will throw exception if not-verified)
+  CryptoPP::RSASSA_PKCS1v15_SHA_Verifier verifier(key);
+
+  CryptoPP::StringSource ss2(msg + signature, true,
+    new CryptoPP::SignatureVerificationFilter(
+      verifier, NULL,
+      CryptoPP::SignatureVerificationFilter::THROW_EXCEPTION
+    )
+  );
+
+  std::cout << "\n***************************************************************" << std::endl;
+  std::cout << "Verified signature, and therefore PK_S is VALID" << std::endl;
+  std::cout << "****************************************************************\n" << std::endl << std::endl;
 }

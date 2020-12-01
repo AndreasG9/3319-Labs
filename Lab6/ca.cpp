@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
 
   while (true) {
     
-    std::cout << "\n (CA) Waiting to receive a message ... \n" << std::endl;
+    std::cout << "\n(CA) Waiting to receive a message ... \n" << std::endl;
 
     // server will send RSA_PK_CA[K_tmp1 || ID_S || TS_1] 
     while ((retval_receive = recv(server_socket, message_receive, BUFFER_LENGTH, 0)) > 0) {
@@ -159,7 +159,6 @@ int main(int argc, char** argv) {
 
         // Print out ciphertext and temp des key
         std::cout << "\n***************************************************************" << std::endl;
-        //std::cout << "(CA) received ciphertext: " << ciphertext << std::endl;
         std::cout << "(CA) received ciphertext (HEX encoded): " << encode_hex(ciphertext) << std::endl;
         std::cout << "(CA) received K_TMP1: " << plaintext.substr(0, 8) << std::endl;
         std::cout << "***************************************************************\n" << std::endl;
@@ -183,7 +182,6 @@ int main(int argc, char** argv) {
         CryptoPP::StringSink sink2(encoded_SK_S);
         SK_S.DEREncode(sink2);
 
-        std::cout << "size pk_s: " << encoded_PK_S.size() << "\t size sk_s: " << encoded_SK_S.size() << std::endl;
 
         // Build Cert_S = Sign_SK_CA [ID_S || IC_CA || PK_S]
         std::string cert_s = ID_S;
@@ -192,8 +190,6 @@ int main(int argc, char** argv) {
 
         // Sign w/ SK_CA
         cert_s = sign_rsa(SK_CA, cert_s); 
-
-        std::cout << "size: cert_s :" << cert_s.size() << std::endl;
 
         // Build PK_S || SK_S || CERT_S || ID_S || TS_2
         plaintext.clear();
@@ -209,7 +205,6 @@ int main(int argc, char** argv) {
         // Encrypt using DES_K_TMP1
         ciphertext = encrypt_des(k_tmp1, plaintext);
 
-        std::cout << "ct size: " << ciphertext.size() << std::endl;
 
         // SEND encrypted msg (new key pair, cert_s, etc...) to server
         retval_send = send(server_socket, ciphertext.c_str(), ciphertext.size(), 0);

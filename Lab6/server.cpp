@@ -319,6 +319,7 @@ int main(int argc, char** argv) {
       const CryptoPP::Integer& public_n = PK_S.GetModulus();
       const CryptoPP::Integer& public_e = PK_S.GetPublicExponent();
 
+
       // Print out sent plaintext
       std::cout << "\n***************************************************************" << std::endl;
       std::cout << "(S) sent plaintext (HEX encoded): " << plaintext << std::endl;
@@ -361,8 +362,6 @@ int main(int argc, char** argv) {
 
       // DES encrypt using K_TMP2
       ciphertext = encrypt_des(K_TMP2, plaintext);
-
-      std::cout << "sending step 6!\n";
 
       // send ciphertext message 
       retval_send = send(client_socket, ciphertext.c_str(), ciphertext.size(), 0);
